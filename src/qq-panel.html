@@ -229,6 +229,35 @@ pre.log .line { animation: rowIn .2s backwards }
 #to-top.on { opacity: 1; transform: none; pointer-events: auto; }
 #to-top:hover { color: var(--acc); border-color: var(--acc); }
 
+/* 词库页 */
+.lex-search { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.lex-search input { flex: 1; min-width: 220px; }
+.lex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 11px; }
+.lex-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); padding: 13px 15px; box-shadow: var(--shadow);
+  cursor: pointer; transition: border-color .16s, transform .16s, box-shadow .16s; animation: cardIn .35s backwards; }
+.lex-card:hover { border-color: var(--acc); transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+.lex-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.lex-term { font-size: 15px; font-weight: 700; color: var(--tx); }
+.lex-meaning { font-size: 13px; margin: 5px 0 7px; color: var(--tx); }
+.lex-row { font-size: 12px; color: var(--tx2); margin: 3px 0; display: flex; gap: 8px; }
+.lex-row .k { color: var(--tx3); flex: 0 0 44px; }
+.lex-ex { background: var(--bg); border-left: 2px solid var(--acc); border-radius: 0 6px 6px 0; padding: 4px 9px; font-size: 12px; color: var(--tx2); margin: 4px 0; }
+.lex-meta { font-size: 10.5px; color: var(--tx3); margin-top: 7px; border-top: 1px dashed color-mix(in srgb, var(--line) 70%, transparent); padding-top: 6px; }
+
+/* 编辑弹窗 */
+#lex-modal { position: fixed; inset: 0; z-index: 80; background: color-mix(in srgb, var(--tx) 30%, transparent);
+  display: none; align-items: flex-start; justify-content: center; padding: 5vh 16px; overflow-y: auto; backdrop-filter: blur(3px); }
+#lex-modal.on { display: flex; }
+.lex-dialog { background: var(--card); border: 1px solid var(--line2); border-radius: 14px; width: min(640px, 100%);
+  box-shadow: var(--shadow-hover); animation: dlgIn .28s cubic-bezier(.2,.9,.3,1.15); }
+@keyframes dlgIn { from { opacity: 0; transform: translateY(22px) scale(.97) } }
+.lex-dialog .dlg-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.lex-dialog .dlg-head .lex-term { font-size: 17px; }
+.lex-dialog .dlg-body { padding: 14px 18px 18px; display: grid; gap: 10px; }
+.lex-dialog textarea { background: var(--bg); border: 1px solid var(--line2); color: var(--tx); border-radius: 8px; padding: 8px 10px; font: 12.5px/1.6 var(--mono); width: 100%; min-height: 54px; resize: vertical; }
+.lex-dialog .field .lbl { margin-bottom: 4px; }
+.lex-dialog .dlg-foot { display: flex; gap: 9px; justify-content: flex-end; padding: 12px 18px 16px; }
+
 /* 情感页 */
 .six-row { display: flex; align-items: center; gap: 12px; margin: 9px 0; }
 .six-label { flex: 0 0 52px; font-size: 13px; color: var(--tx2); }
@@ -327,6 +356,7 @@ a { color: var(--acc); text-decoration: none; } a:hover { text-decoration: under
       <span class="nav-item" data-nav="gate"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg>陌生人门控<span class="badge" id="nav-gate-badge"></span></span>
       <div class="nav-group">她的世界</div>
       <span class="nav-item" data-nav="diary"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16l-8-4-8 4z"/></svg>日记</span>
+      <span class="nav-item" data-nav="lexicon"><svg viewBox="0 0 24 24"><path d="M4 19V5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><path d="M4 17a2 2 0 0 1 2-2h13"/><path d="M9 7h7"/></svg>黑话词库</span>
       <span class="nav-item" data-nav="affection"><svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-10-9.3C.5 8 2.5 4 6.5 4c2.4 0 4.2 1.3 5.5 3.2C13.3 5.3 15.1 4 17.5 4c4 0 6 4 4.5 7.7C19.5 16.4 12 21 12 21z"/></svg>情感</span>
       <span class="nav-item" data-nav="self"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>自我</span>
       <span class="nav-item" data-nav="interactions"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v3a3 3 0 0 0 3 3h6M18 8.5v3a3 3 0 0 1-3 3"/></svg>任务流</span>
@@ -432,6 +462,23 @@ a { color: var(--acc); text-decoration: none; } a:hover { text-decoration: under
       <button id="to-top" title="回到顶部">↑</button>
     </section>
 
+    <!-- 黑话词库 -->
+    <section data-view="lexicon">
+      <div class="card" style="padding:11px 16px;margin-bottom:13px">
+        <div class="lex-search">
+          <input type="text" id="lex-q" placeholder="搜索词条 / 释义 / 别称…（实时过滤）" autocomplete="off">
+          <div class="pills" style="margin:0" id="lex-status">
+            <span class="pill on" data-s="">全部</span>
+            <span class="pill" data-s="active">active</span>
+            <span class="pill" data-s="rejected">rejected</span>
+          </div>
+        </div>
+        <div class="chips" id="lex-libs"></div>
+      </div>
+      <div class="lex-grid" id="lex-grid"></div>
+      <div class="muted" id="lex-empty" style="padding:18px;text-align:center;display:none">没有匹配的词条</div>
+    </section>
+
     <!-- 情感 -->
     <section data-view="affection">
       <div class="tiles">
@@ -491,6 +538,30 @@ a { color: var(--acc); text-decoration: none; } a:hover { text-decoration: under
 
 <button id="save-fab">保存修改 <span class="cnt" id="save-cnt">0</span></button>
 <div id="toast"></div>
+<div id="lex-modal">
+  <div class="lex-dialog">
+    <div class="dlg-head">
+      <span class="lex-term" id="lex-m-term">-</span>
+      <span class="chip mono" id="lex-m-meta">-</span>
+      <span style="flex:1"></span>
+      <button class="mini ghost" id="lex-m-close">关闭</button>
+    </div>
+    <div class="dlg-body">
+      <div class="field"><div class="lbl">释义 meaning</div><textarea id="lex-m-meaning"></textarea></div>
+      <div class="field"><div class="lbl">用法 usage</div><textarea id="lex-m-usage" style="min-height:40px"></textarea></div>
+      <div class="field"><div class="lbl">别称 aliases（逗号分隔）</div><input type="text" id="lex-m-aliases"></div>
+      <div class="field"><div class="lbl">例句 examples（每行一句）</div><textarea id="lex-m-examples"></textarea></div>
+      <div class="field"><div class="lbl">状态 status</div>
+        <select id="lex-m-status" style="background:var(--bg);color:var(--tx);border:1px solid var(--line2);border-radius:8px;padding:7px 10px;font-size:13px">
+          <option value="active">active</option><option value="archived">archived</option><option value="rejected">rejected</option>
+        </select></div>
+    </div>
+    <div class="dlg-foot">
+      <button class="ghost" id="lex-m-cancel">取消</button>
+      <button id="lex-m-save">保存修改</button>
+    </div>
+  </div>
+</div>
   </div>
 </div>
 
@@ -510,7 +581,7 @@ Theme.apply();
 
 // ================= 视图导航 =================
 const Nav = {
-  titles: { overview: '概览', conn: '连接', windows: '会话窗口', gate: '陌生人门控', config: '配置', diary: '日记', affection: '情感', self: '自我', interactions: '任务流', knowledge: '知识库', log: '运行日志' },
+  titles: { overview: '概览', conn: '连接', windows: '会话窗口', gate: '陌生人门控', config: '配置', diary: '日记', affection: '情感', self: '自我', interactions: '任务流', knowledge: '知识库', lexicon: '黑话词库', log: '运行日志' },
   show(id) {
     if (!this.titles[id]) id = 'overview';
     document.querySelectorAll('section[data-view]').forEach((s) => s.classList.toggle('on', s.dataset.view === id));
@@ -519,10 +590,12 @@ const Nav = {
     localStorage.setItem('qqpanel-view', id);
     if (id === 'log') CardLog.refresh();
     if (id === 'diary') Diary.ensure();
+    if (id === 'lexicon') Lexicon.ensure();
     if (id === 'affection') AffectionView.ensure();
     if (id === 'self') SelfDocs.ensure();
     if (id === 'interactions') Interactions.ensure();
     if (id === 'knowledge') Knowledge.ensure();
+    if (id === 'lexicon') Lexicon.ensure();
   },
 };
 document.querySelectorAll('.nav-item').forEach((n) => { n.onclick = () => Nav.show(n.dataset.nav); });
@@ -952,6 +1025,83 @@ $('feed-more').onclick = () => Diary.renderFeed(false);
 $('to-top').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
 window.addEventListener('scroll', () => { $('to-top').classList.toggle('on', window.scrollY > 500); }, { passive: true });
 const feedSentinel = new IntersectionObserver((es) => { if (es[0].isIntersecting && Diary.mode === 'feed' && Diary.shown < Diary.entries.length) Diary.renderFeed(false); });
+
+// ---- 黑话词库（memu 词库，本地专用）----
+const Lexicon = {
+  libs: [], terms: [], q: '', status: '', libFile: '', loaded: false,
+  async ensure() { if (!this.loaded) await this.load(); },
+  async load() {
+    try {
+      const r = await App.api('/channel-qq-api/lexicon');
+      this.libs = r.libraries || [];
+      this.terms = [];
+      for (const lib of this.libs) {
+        for (const t of lib.terms || []) this.terms.push({ ...t, _file: lib.file, _lib: lib.libraryId, _rejected: false });
+        for (const t of lib.rejected || []) this.terms.push({ ...t, _file: lib.file, _lib: lib.libraryId, _rejected: true });
+      }
+      const libChips = ['<span class="chip click" data-lib="">全部词库</span>'].concat(
+        this.libs.map((l) => '<span class="chip click" data-lib="' + esc(l.file) + '">' + esc(l.libraryId) + '</span>'));
+      document.getElementById('lex-libs').innerHTML = libChips.join('');
+      document.querySelectorAll('#lex-libs .chip').forEach((c) => { c.onclick = () => { this.libFile = c.dataset.lib; document.querySelectorAll('#lex-libs .chip').forEach((x) => x.classList.toggle('ok', x === c)); this.render(); }; });
+      this.loaded = true;
+      this.render();
+    } catch (e) { document.getElementById('lex-grid').innerHTML = '<div class="muted">词库加载失败: ' + esc(e.message) + '</div>'; }
+  },
+  match(t) {
+    if (this.status && t.status !== this.status) return false;
+    if (this.libFile && t._file !== this.libFile) return false;
+    if (!this.q) return true;
+    const q = this.q.toLowerCase();
+    const hay = [t.term, t.meaning, t.usage].concat(t.aliases || []).join(' ').toLowerCase();
+    return hay.includes(q);
+  },
+  render() {
+    const list = this.terms.filter((t) => this.match(t));
+    document.getElementById('lex-empty').style.display = list.length ? 'none' : 'block';
+    document.getElementById('lex-grid').innerHTML = list.map((t, i) => this.card(t, i)).join('');
+    document.querySelectorAll('#lex-grid .lex-card').forEach((el) => { el.onclick = () => Lexicon.open(Number(el.dataset.idx)); });
+  },
+  card(t, i) {
+    const hits = t.hitCounts && typeof t.hitCounts === 'object' ? '命中 ' + (t.hitCounts.injection || 0) + '/' + (t.hitCounts.candidate || 0) : '';
+    return '<div class="lex-card" data-idx="' + this.terms.indexOf(t) + '" style="animation-delay:' + Math.min(i * 0.03, 0.4) + 's">' +
+      '<div class="lex-head"><span class="lex-term">' + esc(t.term || '') + '</span>' +
+      (t.kind ? '<span class="chip">' + esc(t.kind) + '</span>' : '') +
+      '<span class="chip ' + (t._rejected ? 'warn' : 'ok') + '">' + esc(t.status || '?') + '</span>' +
+      '<span class="chip mono">' + esc(t._lib) + '</span></div>' +
+      (t.meaning ? '<div class="lex-meaning">' + esc(t.meaning) + '</div>' : '') +
+      (Array.isArray(t.aliases) && t.aliases.length ? '<div class="lex-row"><span class="k">别称</span><span class="chips">' + t.aliases.map((a) => '<span class="chip">' + esc(a) + '</span>').join('') + '</span></div>' : '') +
+      '<div class="lex-meta">' + [hits, t.confidence != null ? '置信 ' + t.confidence : '', t.updatedAt ? '更新 ' + String(t.updatedAt).slice(0, 10) : ''].filter(Boolean).join(' · ') + '</div></div>';
+  },
+  open(idx) {
+    const t = this.terms[idx]; if (!t) return;
+    const m = document.getElementById('lex-modal');
+    document.getElementById('lex-m-term').textContent = t.term || '';
+    document.getElementById('lex-m-meta').textContent = (t._lib || '') + ' · ' + (t.id || '');
+    const val = (id, v) => { const el = document.getElementById(id); el.value = v == null ? '' : (Array.isArray(v) ? v.join(', ') : String(v)); };
+    val('lex-m-meaning', t.meaning); val('lex-m-usage', t.usage);
+    val('lex-m-aliases', (t.aliases || []).join(', ')); val('lex-m-examples', (t.examples || []).join('\n'));
+    document.getElementById('lex-m-status').value = t.status || 'active';
+    document.getElementById('lex-m-save').onclick = async () => {
+      const patch = {
+        meaning: document.getElementById('lex-m-meaning').value,
+        usage: document.getElementById('lex-m-usage').value,
+        aliases: document.getElementById('lex-m-aliases').value.split(/[,，]+/).map((x) => x.trim()).filter(Boolean),
+        examples: document.getElementById('lex-m-examples').value.split('\n').map((x) => x.trim()).filter(Boolean),
+        status: document.getElementById('lex-m-status').value,
+      };
+      const r = await App.api('/channel-qq-api/lexicon/save', { libraryFile: t._file, termId: t.id, patch });
+      if (r.ok) { toast('词条已保存 ✓'); Object.assign(t, patch); this.render(); m.classList.remove('on'); }
+      else toast('保存失败: ' + (r.error || '?'), false);
+    };
+    m.classList.add('on');
+  },
+};
+document.getElementById('lex-q').addEventListener('input', (e) => { Lexicon.q = e.target.value.trim(); Lexicon.render(); });
+document.querySelectorAll('#lex-status .pill').forEach((p) => { p.onclick = () => { Lexicon.status = p.dataset.s; document.querySelectorAll('#lex-status .pill').forEach((x) => x.classList.toggle('on', x === p)); Lexicon.render(); }; });
+document.getElementById('lex-m-close').onclick = () => document.getElementById('lex-modal').classList.remove('on');
+document.getElementById('lex-m-cancel').onclick = () => document.getElementById('lex-modal').classList.remove('on');
+document.getElementById('lex-modal').addEventListener('click', (e) => { if (e.target === document.getElementById('lex-modal')) document.getElementById('lex-modal').classList.remove('on'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('lex-modal').classList.remove('on'); });
 
 // ---- 情感页 ----
 const AffectionView = {

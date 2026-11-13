@@ -157,14 +157,25 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
       const parsed = readJsonSafe(workspaceDir('knowledge', 'entries.json'))
       if (Array.isArray(parsed)) entries = parsed
     } catch { entries = [] }
+    // [local/demo] 空库时回落演示数据（panel-demo），条目带 demo 标记
+    if (entries.length === 0) {
+      try {
+        const demo = readJsonSafe(path.join(dshHome, 'panel-demo', 'knowledge', 'entries.json'))
+        if (Array.isArray(demo)) entries = demo.map((e) => ({ ...e, demo: true }))
+      } catch { /* no demo */ }
+    }
     return { ok: true as const, entries }
   }
 
   function readSelfDocs() {
+    // [local/demo] 工作区缺文件时逐文件回落 panel-demo（带 demo 标记），她写了真文件即自动顶掉
     return SELF_DOCS.map((name) => {
       let text: string | null = null
-      try { text = readFileSync(workspaceDir('self', name), 'utf8').slice(0, DOC_TEXT_MAX) } catch { text = null }
-      return { name, text }
+      let demo = false
+      try { text = readFileSync(workspaceDir('self', name), 'utf8').slice(0, DOC_TEXT_MAX) } catch {
+        try { text = readFileSync(path.join(dshHome, 'panel-demo', 'self', name), 'utf8').slice(0, DOC_TEXT_MAX); demo = true } catch { text = null }
+      }
+      return { name, text, ...(demo ? { demo: true } : {}) }
     })
   }
 
@@ -176,6 +187,15 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
         try { events.push(JSON.parse(line)) } catch { /* skip bad line */ }
       }
     } catch { events = [] }
+    // [local/demo] 空流时回落演示数据
+    if (events.length === 0) {
+      try {
+        const lines = readFileSync(path.join(dshHome, 'panel-demo', 'knowledge', 'interactions.jsonl'), 'utf8').split('\n').filter(Boolean)
+        for (const line of lines.slice(-300)) {
+          try { events.push({ ...JSON.parse(line), demo: true }) } catch { /* skip */ }
+        }
+      } catch { /* no demo */ }
+    }
     return { ok: true as const, events }
   }
 

@@ -763,32 +763,9 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
       return { ok: true, note: '家族五路索引已后台启动(会话/公共/tongling/today/host)' }
     },
   })
-  reg({
-    name: 'self_memory_write', description: '写入你的专属长期记忆：把"值得记很久的事"(重要事实/决议/约定/user的话)写成 markdown 存进专属库 knowledge/tongling/记忆/，自动后台向量化(下次 kb_search 就能召回)。写事实和原文，不写流水账。',
-    parameters: { type: 'object', properties: { title: { type: 'string' }, text: { type: 'string' }, tags: { type: 'string' } }, required: ['title', 'text'] }, output: out,
-    async execute(args) {
-      const t = String(args.text ?? '').trim()
-      const title = String(args.title ?? '').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)
-      if (!t || !title) return { ok: false, error: 'title 和 text 都要给' }
-      const dir = path.join(workspaceOf(undefined), 'knowledge', agentName(), '记忆')
-      fs.mkdirSync(dir, { recursive: true })
-      const d = new Date()
-      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      let file = path.join(dir, `${date}-${title}.md`)
-      let n = 2
-      while (fs.existsSync(file)) file = path.join(dir, `${date}-${title}-${n++}.md`)
-      const tags = String(args.tags ?? '').trim()
-      const body = `---\ntags: [${tags ? tags.split(/[,，]/).map(x => x.trim()).filter(Boolean).join(', ') : '记忆'}]\n---\n\n# ${String(args.title ?? '').slice(0, 60)}\n\n${t.slice(0, 4000)}\n`
-      fs.writeFileSync(file, body)
-      const cli = kbCli()
-      if (cli && fs.existsSync(cli)) {
-        const { execFile } = await import('node:child_process')
-        const c = execFile(process.execPath, [cli, 'index', '--agent', agentName()], { timeout: 600000, windowsHide: true, env: { ...process.env, KB_WORKSPACE: workspaceOf(undefined) } }); c.unref?.()
-      }
-      audit(dshHome(), 'self_memory_write', title)
-      return { ok: true, file: file.replace(/\\/g, '/'), note: '已写入专属库并向量化，kb_search 可召回' }
-    },
-  })
+  // [local/memu-division] self_memory_write 已摘除：事实/决议/约定类显式写入归 dsh-memu-memory
+  // （memu 逐轮自动沉淀 + memu_private_remember 显式写入）。本引擎只保留日记域
+  // （self_diary_write）与知识提取（extract_knowledge，日记衍生自查自判）。
   reg({
     name: 'kb_deep_search', description: '记忆深挖(原始会话层)：按语义搜你全部历史会话原文，命中带[窗口/日期/时间/出处文件]。kb_search 是浅层速查，这个是深层考古——"当时到底怎么说的"用它。',
     parameters: { type: 'object', properties: { query: { type: 'string' }, top: { type: 'number' } }, required: ['query'] }, output: out,
@@ -1069,7 +1046,7 @@ offs.push(regSection({
         '感知：brain_search(全脑) / kb_search(语义) / kb_deep_search(考古) / self_read(读文件)',
         '行动：qq_send_text / send_meme / qq_send_emoji',
         '沟通：tailmsg_send/inbox/ack / task_log / bee_send',
-        '自主：self_alarm_set / self_growth_update / self_memory_write / self_style_rule / soul_seed_write',
+        '自主：self_alarm_set / self_growth_update / self_diary_write / self_style_rule / soul_seed_write',
       ].join('\n'))
       // 家族地图(配置驱动)
       parts.push(['【咱的家】',
@@ -1231,33 +1208,10 @@ offs.push(regSection({
   })
 
   // ---- 可塑型记忆六件(1030 user令) ----
+  // [local/memu-division] self_memory_write_v2 已摘除：同 self_memory_write，事实类显式写入归 dsh-memu-memory。
   const MEMSTATE2 = path.join(workspaceOf(undefined), 'knowledge', '.kb-memstate.json')
   function memStateRead() { try { return JSON.parse(fs.readFileSync(MEMSTATE2, 'utf8')) } catch { return { archived: [], forgotten: [] } } }
   function memStateWrite(m) { try { fs.writeFileSync(MEMSTATE2, JSON.stringify(m, null, 1)) } catch { } }
-  reg({
-    name: 'self_memory_write_v2', description: '增强版记忆写入：importance=重要性1-5, emotion=情绪标记, tags=标签。写入后自动向量化。',
-    parameters: { type: 'object', properties: { title: { type: 'string' }, text: { type: 'string' }, importance: { type: 'number' }, emotion: { type: 'string' }, tags: { type: 'string' } }, required: ['title', 'text'] }, output: out,
-    async execute(args) {
-      const t = String(args.text ?? '').trim()
-      const title = String(args.title ?? '').replace(/[\/:*?\n<>|s]+/g, '-').slice(0, 40)
-      if (!t || !title) return { ok: false, error: 'title 和 text 都要给' }
-      const imp = Math.min(Math.max(Number(args.importance ?? 3), 1), 5)
-      const emo = String(args.emotion ?? '').slice(0, 20)
-      const dir = path.join(workspaceOf(undefined), 'knowledge', agentName(), '记忆')
-      fs.mkdirSync(dir, { recursive: true })
-      const date = d = new Date().toISOString().slice(0, 10)
-      let file = path.join(dir, date + '-' + title + '.md')
-      let n = 2
-      while (fs.existsSync(file)) file = path.join(dir, date + '-' + title + '-' + (n++) + '.md')
-      const tags = String(args.tags ?? '').trim()
-      const body = '---' + NL + 'tags: [' + (tags || '记忆') + ']' + NL + 'importance: ' + imp + NL + 'emotion: ' + (emo || '中性') + NL + 'writtenAt: ' + new Date().toISOString() + NL + '---' + NL + NL + '# ' + String(args.title ?? '').slice(0, 60) + NL + NL + t.slice(0, 4000) + NL
-      fs.writeFileSync(file, body)
-      const cli = kbCli()
-      if (cli && fs.existsSync(cli)) { const { execFile } = await import('node:child_process'); const c = execFile(process.execPath, [cli, 'index', '--agent', agentName()], { timeout: 600000, windowsHide: true, env: { ...process.env, KB_WORKSPACE: workspaceOf(undefined) } }); c.unref?.() }
-      audit(dshHome(), 'self_memory_write_v2', title + ' imp=' + imp + ' emo=' + emo)
-      return { ok: true, file: file.replace(/\\/g, '/'), importance: imp, emotion: emo }
-    },
-  })
   reg({
     name: 'memory_link', description: '记忆关联：把两条记忆/概念用突触连起来。from=概念A, to=概念B, rel=关系。',
     parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, rel: { type: 'string' } }, required: ['from', 'to'] }, output: out,
