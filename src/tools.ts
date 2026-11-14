@@ -18,6 +18,7 @@ import type { OutboundQueue } from './outbound.js'
 import { segmentReply, smartSplitMessage } from './outbound.js'
 import type { SentLog } from './sent-log.js'
 import { runMessageChain } from './chain.js'
+import { qqStickerMatch as qqStickerMatchClient, collectStickerFile as qqCollectStickerFile, listQqStickers } from './qq-sticker.js'
 import type { KnowledgeEntry, KnowledgeStore } from './knowledge.js'
 import type { AffectionStore } from './affection.js'
 
@@ -298,6 +299,7 @@ const memePackMatchFn = (desc: string): string | null => {
           target: Number(args.target),
           log,
           client,
+          qqStickerMatch: (desc) => qqStickerMatchClient(client, desc),
           memePackMatch: memePackMatchFn,
           library,
           reactMessageId: args.reactToId != null ? Number(args.reactToId) : null,
@@ -426,6 +428,7 @@ const memePackMatchFn = (desc: string): string | null => {
           target: Number(args.target),
           log,
           client,
+          qqStickerMatch: (desc) => qqStickerMatchClient(client, desc),
           memePackMatch: memePackMatchFn,
           library,
           reactMessageId: Number(args.messageId),
@@ -1010,42 +1013,28 @@ ${String(args.code ?? '')}`
     },
     {
       name: 'qq_send_emoji',
-      description: '发送一张本地表情包图片（stolen/registered 目录中的文件名）。注意：要透明底必须发 ffmpeg 真转的 .gif（registered 库 562 张全是）；webp/png 直发 QQ 会把透明拍扁成白底，webp 先转 gif 再发。',
+      description: '发送一张 QQ 收藏表情（QQ 收藏）。id 或描述先经 qq_list_emojis / qq_search_emojis 获取。',
       parameters: {
         type: 'object',
         properties: {
           isGroup: { type: 'boolean' },
           target: { type: 'number' },
-          file: { type: 'string', description: '本地图片绝对路径' },
+          id: { type: 'string', description: 'QQ 收藏表情的 id 或描述（先 qq_list_emojis / qq_search_emojis 获取）' },
         },
-        required: ['isGroup', 'target', 'file'],
+        required: ['isGroup', 'target', 'id'],
       },
       run: async (args) => {
-        // 2026-09-30 owner 令：QQ 严格按后缀判格式——.gif 后缀=动画表情；其他=原图直发（QQ 自己识别透明/压缩）。
-        // 发送前按文件魔数校验后缀：伪装错就复制一份带真实后缀的临时文件再发（原图字节零修改），发完清理。
-        const fsMod = await import('node:fs/promises')
-        const pathMod = await import('node:path')
-        let sendPath = String(args.file ?? '')
-        try {
-          const buf = await fsMod.readFile(sendPath)
-          const isPng = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50
-          const isGif = buf.length > 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46
-          const isJpg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8
-          const isWebp = buf.length > 12 && buf.subarray(0, 4).toString('binary') === 'RIFF' && buf.subarray(8, 12).toString('binary') === 'WEBP'
-          const realExt = isPng ? '.png' : isGif ? '.gif' : isJpg ? '.jpg' : isWebp ? '.webp' : null
-          if (realExt !== null) {
-            const curExt = pathMod.extname(sendPath).toLowerCase()
-            if (curExt !== realExt) {
-              const tmpPath = pathMod.join(pathMod.dirname(sendPath), 'send_' + Date.now() + realExt)
-              await fsMod.writeFile(tmpPath, buf)
-              sendPath = tmpPath
-              setTimeout(() => { fsMod.unlink(tmpPath).catch(() => {}) }, 30_000)
-            }
-          }
-        } catch { /* 读不了就按原路径发 */ }
-        const emojiBuf = (await import('node:fs/promises')).readFile(sendPath)
-        const emojiB64 = (await emojiBuf).toString('base64')
-        const message = [{ type: 'image', data: { file: `base64://${emojiB64}` } }]
+        const ref = String(args.id ?? '')
+        const list = await listQqStickers(client, ref, 10)
+        const entry = list.find((e) => e.id === ref) ?? list[0]
+        if (!entry) throw new Error(`QQ 收藏里没有匹配「${ref}」——先 qq_list_emojis 看看有什么`)
+        if (!entry.url) throw new Error(`表情 ${entry.id} 没有可发送的图片地址`)
+        // 收藏表情的图片 URL 由 QQ CDN 直出；本机下载转 base64 再发，避免网关二次拉取失败（带签名/防盗链）。
+        const res = await fetch(entry.url, { signal: AbortSignal.timeout(15_000) })
+        if (!res.ok) throw new Error(`拉取表情图片失败: HTTP ${res.status}`)
+        const buf = Buffer.from(await res.arrayBuffer())
+        if (buf.length === 0 || buf.length > 10 * 1024 * 1024) throw new Error(`表情图片大小越界（${buf.length} 字节）`)
+        const message = [{ type: 'image', data: { file: `base64://${buf.toString('base64')}` } }]
         return args.isGroup === true
           ? await out.push(() => callTool('send_group_msg', { group_id: args.target, message }))
           : await out.push(() => callTool('send_private_msg', { user_id: args.target, message }))
@@ -1362,8 +1351,26 @@ ${String(args.code ?? '')}`
       run: async (args) => callTool('delete_group_file', { group_id: args.groupId, file_id: String(args.fileId) }),
     },
     {
+      name: 'qq_list_stickers',
+      description: '列出 QQ 账号的收藏表情（QQ 收藏，含 id/备注/标签）。等同 qq_list_emojis 的别名视图，优先用这个。',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: '按备注/标签过滤（可空）' } } },
+      run: async (args) => {
+        const list = await listQqStickers(client, String(args.query ?? ''), 48)
+        return { count: list.length, stickers: list.map((e) => ({ id: e.id, desc: e.desc, localNote: e.localNote, tags: e.tags })) }
+      },
+    },
+    {
+      name: 'qq_collect_sticker',
+      description: '把本地图片文件收进 QQ 账号的收藏表情（之后 [表情: 描述] 会优先用它）。file 为图片绝对路径，remark 为收藏备注（≤20字，可选）。',
+      parameters: { type: 'object', properties: { file: { type: 'string', description: '图片绝对路径' }, remark: { type: 'string', description: '收藏备注（≤20字）' } }, required: ['file'] },
+      run: async (args) => {
+        const entry = await qqCollectStickerFile(client, String(args.file), String(args.remark ?? ''))
+        return { ok: true, id: entry.id, desc: entry.desc, url: entry.url }
+      },
+    },
+    {
       name: 'qq_list_emojis',
-      description: '列出咱收藏的表情包（本地文件路径）。发表情前先列出来挑一张合适的。',
+      description: '列出 QQ 账号的收藏表情（QQ 收藏，含 id/备注/标签/描述）。要用某张：[表情: id或备注或描述] 连锁标记，或 qq_send_emoji(id=...)。',
       parameters: { type: 'object', properties: {} },
       run: async () => {
         if (library !== undefined) {
@@ -1387,12 +1394,17 @@ ${String(args.code ?? '')}`
             }
           } catch {}
         }
-        return { count: out.length, emojis: out.slice(0, 60) }
+        const stickers = await listQqStickers(client, '', 60)
+        return {
+          count: stickers.length,
+          emojis: stickers.map((e) => ({ id: e.id, desc: e.desc, localNote: e.localNote, tags: e.tags, url: e.url })),
+          note: '这是 QQ 账号的收藏表情（QQ 收藏）。发送用 [表情: id或备注或描述] 连锁标记或 qq_send_emoji(id=...)。',
+        }
       },
     },
     {
       name: 'qq_search_emojis',
-      description: '按情绪/语义搜索咱收藏的表情包（比如：嘲讽、开心、摸鱼、吃瓜）。返回最匹配的几张的文件路径和描述，用 qq_send_emoji 发送其中 file。',
+      description: '按情绪/语义搜索 QQ 收藏表情（匹配 备注/我的笔记/标签/描述，比如：嘲讽、开心、摸鱼、吃瓜）。返回 id 和描述，用 [表情: id] 或 qq_send_emoji(id=...) 发送。',
       parameters: {
         type: 'object',
         properties: {
@@ -1402,9 +1414,8 @@ ${String(args.code ?? '')}`
         required: ['query'],
       },
       run: async (args) => {
-        if (library === undefined) return { error: '表情库未启用', emojis: [] }
-        const hits = library.search(String(args.query ?? ''), Math.min(Number(args.limit ?? 5), 10))
-        return { count: hits.length, emojis: hits }
+        const stickers = await listQqStickers(client, String(args.query ?? ''), Math.min(Number(args.limit ?? 5), 10))
+        return { count: stickers.length, emojis: stickers.map((e) => ({ id: e.id, desc: e.desc, localNote: e.localNote, tags: e.tags })), note: '发送用 [表情: id或描述] 或 qq_send_emoji(id=...)' }
       },
     },
     {

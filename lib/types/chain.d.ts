@@ -1,5 +1,11 @@
 import type { EmojiLibrary } from './emoji-library.js';
 export interface ChainDeps {
+    /** QQ 收藏表情优先匹配（2026-11-14 owner 令）：命中返回 base64 图片字节 */
+    qqStickerMatch?: (desc: string) => Promise<{
+        b64: string;
+        id: string;
+        entry?: unknown;
+    } | null>;
     isGroup: boolean;
     /** 群号或好友 QQ 号 */
     target: number;

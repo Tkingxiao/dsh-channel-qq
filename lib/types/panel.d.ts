@@ -15,6 +15,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { QQChannelConfig } from './config.js';
 export interface PanelDeps {
     client?: {
+        call(action: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
         selfId: number | null;
         clientIdentity: import('./client-compat.js').ClientIdentity | null;
         connection: {

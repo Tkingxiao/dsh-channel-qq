@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, 
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describeClient } from './client-compat.js'
+import { listQqStickers, deleteSticker, collectStickerFile, syncStickerLibrary } from './qq-sticker.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { QQChannelConfig } from './config.js'
 
@@ -33,6 +34,7 @@ function denyNonLoopback(req: { headers: { host?: string } }, res: { writeHead: 
 
 export interface PanelDeps {
   client?: {
+    call(action: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>
     selfId: number | null
     clientIdentity: import('./client-compat.js').ClientIdentity | null
     connection: { mode: string; url: string }
@@ -325,6 +327,46 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
       method: 'GET', path: '/channel-qq-api/knowledge',
       handler: (_req, res) => {
         json(res, 200, listKnowledge())
+      },
+    },
+    {
+      method: 'GET', path: '/channel-qq-api/qq-stickers',
+      handler: async (_req, res) => {
+        try {
+          if (!deps.client?.call) return json(res, 400, { ok: false, error: 'client 不可用' })
+          const stickers = await listQqStickers(deps.client as unknown as Parameters<typeof listQqStickers>[0], '', 200)
+          json(res, 200, { ok: true, stickers })
+        } catch (e) {
+          json(res, 502, { ok: false, error: e instanceof Error ? e.message : String(e) })
+        }
+      },
+    },
+    {
+      method: 'POST', path: '/channel-qq-api/qq-stickers/delete',
+      handler: async (req, res) => {
+        try {
+          if (!deps.client?.call) return json(res, 400, { ok: false, error: 'client 不可用' })
+          const body = JSON.parse((await readBody(req)) || '{}') as { id?: string }
+          await deleteSticker(deps.client as unknown as Parameters<typeof deleteSticker>[0], String(body.id ?? ''))
+          log(`panel: qq-sticker deleted ${String(body.id ?? '')}`)
+          json(res, 200, { ok: true })
+        } catch (e) {
+          json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
+        }
+      },
+    },
+    {
+      method: 'POST', path: '/channel-qq-api/qq-stickers/collect',
+      handler: async (req, res) => {
+        try {
+          if (!deps.client?.call) return json(res, 400, { ok: false, error: 'client 不可用' })
+          const body = JSON.parse((await readBody(req)) || '{}') as { file?: string; remark?: string }
+          const entry = await collectStickerFile(deps.client as unknown as Parameters<typeof collectStickerFile>[0], String(body.file ?? ''), String(body.remark ?? ''))
+          log(`panel: qq-sticker collected ${entry.id}`)
+          json(res, 200, { ok: true, id: entry.id, desc: entry.desc })
+        } catch (e) {
+          json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
+        }
       },
     },
     {

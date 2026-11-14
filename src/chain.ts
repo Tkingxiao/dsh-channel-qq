@@ -19,6 +19,8 @@ import { DatabaseSync } from 'node:sqlite'
 import type { EmojiLibrary } from './emoji-library.js'
 
 export interface ChainDeps {
+  /** QQ 收藏表情优先匹配（2026-11-14 owner 令）：命中返回 base64 图片字节 */
+  qqStickerMatch?: (desc: string) => Promise<{ b64: string; id: string; entry?: unknown } | null>
   isGroup: boolean
   /** 群号或好友 QQ 号 */
   target: number
@@ -113,6 +115,18 @@ async function memeSemanticFallback(deps: ChainDeps, desc: string): Promise<stri
 
 /** 表情执行器：四级匹配，HIT 发真图，全落空返回 null（由调用方落字）。 */
 async function runSticker(deps: ChainDeps, desc: string): Promise<boolean> {
+  // 第 0 级（2026-11-14 owner 令）：优先用 QQ 收藏的表情（SnowLuma fetch_custom_face_detail）
+  if (deps.qqStickerMatch) {
+    const hit = await deps.qqStickerMatch(desc)
+    if (hit) {
+      const imgMsg = [{ type: 'image', data: { file: 'base64://' + hit.b64 } }]
+      const payload = deps.isGroup ? { group_id: deps.target, message: imgMsg } : { user_id: deps.target, message: imgMsg }
+      await deps.client.call(deps.isGroup ? 'send_group_msg' : 'send_private_msg', payload)
+      deps.log(`chain emoji QQ-fav HIT: [${desc}] → ${hit.id}`)
+      return true
+    }
+  }
+
   let sendPath = deps.memePackMatch(desc) ?? ''
   if (!sendPath) {
     const hits = deps.library ? deps.library.search(desc, 1) : []
