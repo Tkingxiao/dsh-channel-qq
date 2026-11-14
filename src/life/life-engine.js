@@ -88,7 +88,6 @@ function kbDebug(line) {
 }
 
 function ensureEmbedWorker() {
-  try { fs.appendFileSync('D:/Code/dsh-plugin/dsh-control-center/logs/kb-embed-debug.log', 'ENTER ' + new Date().toISOString() + '\n') } catch { }
   const entry = String(readCfg().embedWorkerEntry || '').trim()
   const modelDir = path.join(dshHome(), 'dsh-memu-memory', 'downloads', 'embeddings', 'multilingual-e5-small')
   const why = !entry ? 'embedWorkerEntry 未配置' : !fs.existsSync(entry) ? 'entry 文件不存在' : !fs.existsSync(modelDir) ? '模型目录不存在' : embedWorkerChild ? '已在跑' : 'ok'
