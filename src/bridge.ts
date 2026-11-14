@@ -726,8 +726,8 @@ ${prompt}`)
     const sixDimHint = this.sixDimEngine ? this.sixDimEngine.behaviorHint() : ''
     // 2026-10-21 owner 令：群聊包同样去掉 [知识库自动检索] 注入（检索由她自己用工具做）
     const prompt = (calledLine
-      ? `【刚才群里的消息，最后一条[@${this.persona.pronoun}]是叫${this.persona.pronoun}】：\n${context}\n（结合上下文接话）`
-      : `【最近时段群里的消息】：\n${context}\n（一轮只回一次，有聊头就接一句）`)
+      ? `【刚才群里的消息，最后一条[@${this.persona.pronoun}]是叫${this.persona.pronoun}】：\n${context}\n（有人点名，必须回应——接最近的话题、吐槽或提问都行）`
+      : `【最近时段群里的消息】：\n${context}\n（本轮概率闸已决定参与群聊——必须用 qq_send_text 或 qq_reply_quote 发一条消息：接最近的话题、吐槽或提问都可以）`)
       + `\n【本会话是QQ群：群${conversation.chatId}。回复必须 isGroup=true target=${conversation.chatId}，绝不发往其他窗口。】`
       + `
 （当前时段：${timeContext().period}）`
@@ -735,7 +735,11 @@ ${prompt}`)
       + (sixDimHint !== '' ? `\n（六维情感行为暗示：${sixDimHint}）` : '')
       + (priorBlock !== '' ? '\n' + priorBlock : '')
       + (sentBlock !== '' ? `\n${sentBlock}` : '')
-      + '\n（每条消息带#编号。要指名回应某条就用 qq_reply_quote 引用那条；一般发言用 qq_send_text；想配表情包就先 qq_list_emojis 挑一张再用 qq_send_emoji 发，必须贴合群氛围，拿不准就不发；没有要说的话就不调用任何发送工具。决定沉默时直接结束回合——绝不调用发送工具，更绝不把"本轮不发/沉默/守则/战况分析"之类的内部盘算当成消息发出去，群里只许出现真正要说的那句话。）'
+      + '\n（每条消息带#编号。要指名回应某条就用 qq_reply_quote 引用那条；一般发言用 qq_send_text；想配表情包就先 qq_list_emojis 挑一张再用 qq_send_emoji 发，必须贴合群氛围。'
+      + (calledLine
+          ? '（有人点名了，必须回应。）'
+          : '（本轮已决定参与群聊——必须发一条消息：接最近的话题、吐槽或提问都行；只有当上下文完全无法理解时才允许只结束回合。）')
+      + '绝不调用发送工具以外的输出形式，更绝不把"本轮不发/沉默/守则/战况分析"之类的内部盘算当成消息发出去，群里只许出现真正要说的那句话。）'
 
     try {
       if (conversation.handle === null) {
