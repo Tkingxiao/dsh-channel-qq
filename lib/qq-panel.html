@@ -895,7 +895,7 @@ const CardCfg = {
       const e = ($('f-defaultModel-e')?.value || '').trim();
       return p && m ? p + '|' + m + '|' + e : '';
     }
-    return sel.value;
+    return sel.value + '|' + ($('f-defaultModel-e')?.value || '');
   },
   valueOf(k) {
     const el = $('f-' + k);
@@ -947,7 +947,7 @@ const CardCfg = {
           const [p, m, e] = t.split('|');
           patch['defaultModel.provider'] = p;
           patch['defaultModel.model'] = m;
-          if (e) patch['defaultModel.reasoningEffort'] = e;
+          patch['defaultModel.reasoningEffort'] = e;  // '' = 重置为跟随默认
         }
         continue;
       }

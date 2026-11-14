@@ -217,6 +217,9 @@ export class AffectionStore {
         res.end(renderPage(this.token))
       }
     })
+    server.on('error', (e: NodeJS.ErrnoException) => {
+      this.log(`affection dashboard listen failed (${e.code ?? '?'}): ${e.message} —— 情感面板不可用，但不影响其它功能`)
+    })
     server.listen(port, '127.0.0.1')
     this.log(`affection dashboard: http://127.0.0.1:${port}/?key=${this.token} (主人专属悬浮窗)`)
   }
