@@ -115,6 +115,8 @@ export interface QQChannelConfig {
   requireMention: boolean
   /** Base reply probability in groups; the primary group may override via primaryTalkValue. */
   talkValue: number
+  /** 2026-11-15 owner 令：过概率闸后再掷参与币，命中才发言（0.5=有效频率减半，1=每批必回）。 */
+  participateCoin?: number
   primaryTalkValue?: number
   /** Workspace the QQ agents run in (main knowledge workspace). */
   workspacePath: string | null
@@ -182,6 +184,7 @@ export const DEFAULT_CONFIG: QQChannelConfig = {
   affectionPort: 8789,
   requireMention: true,
   talkValue: 0.6,
+  participateCoin: 0.5,
   rateLimitMs: 800,
   maxMessageLength: 4000,
   segmentation: { enabled: true, style: 'natural', minLength: 20, maxSegments: 8, removeTrailingPeriod: true },

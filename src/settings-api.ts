@@ -40,6 +40,7 @@ const HOT_SCALARS: Record<string, 'number' | 'boolean' | 'string' | 'string?' | 
   'selfId': 'number',
   // 聊天触发
   'talkValue': 'number',
+  'participateCoin': 'number',
   'requireMention': 'boolean',
   'groupEnabled': 'boolean',
   'rateLimitMs': 'number',
