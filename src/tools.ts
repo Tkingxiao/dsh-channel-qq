@@ -376,7 +376,8 @@ const memePackMatchFn = (desc: string): string | null => {
               // 旧版写死主群 key=私聊串账+罐头度量测不了私聊
               const sl = sentLogFor ? await sentLogFor(args.isGroup === true ? `group-${Number(args.target)}` : `dm-${Number(args.target)}`).catch(() => null) : null
               if (sl) {
-                const mid = (lastResult as { data?: { message_id?: number } })?.data?.message_id ?? null
+                const lr = lastResult as { message_id?: number; data?: { message_id?: number } } | null
+                const mid = (typeof lr?.message_id === 'number' ? lr.message_id : lr?.data?.message_id) ?? null
                 await sl.add({ messageId: typeof mid === 'number' ? mid : null, quotedId: null, text: chunk, time: Date.now() })
               }
             }
@@ -462,7 +463,8 @@ const memePackMatchFn = (desc: string): string | null => {
               // 2026-11-07：quote 路径同款——按窗口取发送流水账本
               const sl = sentLogFor ? await sentLogFor(args.isGroup === true ? `group-${Number(args.target)}` : `dm-${Number(args.target)}`).catch(() => null) : null
               if (sl) {
-                const mid = (lastResult as { data?: { message_id?: number } })?.data?.message_id ?? null
+                const lr = lastResult as { message_id?: number; data?: { message_id?: number } } | null
+                const mid = (typeof lr?.message_id === 'number' ? lr.message_id : lr?.data?.message_id) ?? null
                 await sl.add({ messageId: typeof mid === 'number' ? mid : null, quotedId: first ? Number(args.messageId) || null : null, text: chunk, time: Date.now() })
               }
             }

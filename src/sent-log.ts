@@ -50,7 +50,7 @@ export class SentLog {
   /** Rendered block for the context packet; empty string when nothing sent. */
   render(): string {
     if (this.entries.length === 0) return ''
-    const lines = this.entries.slice(-12).map((e) => {
+    const lines = this.entries.slice(-5).map((e) => {
       const quoted = e.quotedId !== null ? `（引用#${e.quotedId}）` : ''
       const id = e.messageId !== null ? `#${e.messageId}` : '#?'
       const time = new Date(e.time)
