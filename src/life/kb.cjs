@@ -169,7 +169,7 @@ function cmdMemState() {
 /** 全脑路由:全家四库+各 agent ses+图谱激活+任务流,一次查询全网合并 */
 async function cmdBrain(query, agentArg) {
   const t0 = Date.now()
-  const [qv] = await embed([query])
+  const [qv] = await embed([query], 'query')
   const qn = Math.sqrt(qv.reduce((a, x) => a + x * x, 0)) || 1
   const out = []
   const scopes = agentArg ? ['', agentArg] : (process.env.KB_AGENTS || 'tongling,today,host').split(',').map(s2 => s2.trim()).filter(Boolean).concat([''])
@@ -410,11 +410,22 @@ function chunk(text, size = 600, overlap = 100) {
   if (cur.trim()) chunks.push(cur)
   return chunks
 }
+// 2026-11-14: 嵌入模型切换——life-engine 启动时把 memu 已下载的本地向量模型
+// (multilingual-e5-small) 以独立 worker 跑在 127.0.0.1:17861（OpenAI 兼容
+// /v1/embeddings），并把实际模型 id 通过 KB_EMBED_MODEL 传给我们。
+// 模型维度 ≠ 索引维度(512)时零填充：正交补空间为零向量，余弦几何完全不变。
+// 超过 512 维的模型截断会毁语义，直接明确报错。
+function fitDim(v, dim) {
+  if (!Array.isArray(v)) throw new Error('embed 返回的不是向量')
+  if (v.length === dim) return v
+  if (v.length > dim) throw new Error(`嵌入维度 ${v.length} 超过索引维度 ${dim}：此模型暂不支持，请换 ≤${dim} 维模型`)
+  return v.concat(new Array(dim - v.length).fill(0))
+}
 async function embed(inputs) {
-  const res = await fetch(EMBED_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'bge-small-zh', input: inputs }) })
+  const res = await fetch(EMBED_URL, { method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.KB_EMBED_TOKEN ? { authorization: 'Bearer ' + process.env.KB_EMBED_TOKEN } : {}) }, body: JSON.stringify({ model: process.env.KB_EMBED_MODEL || 'bge-small-zh', input: inputs }) })
   if (!res.ok) throw new Error(`embed server ${res.status}: ${await res.text()}`)
   const j = await res.json()
-  return j.data.map((d) => d.embedding)
+  return j.data.map((d) => fitDim(d.embedding, KB_DIM))
 }
 async function embedBatch(inputs, size = 32) {
   const out = []
@@ -508,7 +519,7 @@ async function cmdSearch(query, top = 6, filter = {}) {
   const agentArg = filter.agent || ''
   const scopes = agentArg ? ['', agentArg] : [''] // 专属检索=专属库+公共根库合并;默认只查根库(不含任何专属)
   try { hitlogRec({ t: query.slice(0, 40), at: Date.now(), src: 'search', cat: filter.cat || '', sub: filter.sub || '', agent: agentArg }) } catch { }
-  const [qv] = await embed([query])
+  const [qv] = await embed([query], 'query')
   const loadMs = Date.now() - t0
   const now = Date.now()
   const byFile = new Map()
@@ -969,7 +980,7 @@ async function cmdSesIndexInner() {
 async function cmdSesSearch(query, top = 8, agentArg = '') {
   if (!existsSync(SES_INDEX)) { console.log('[ses] empty index — run: node kb.cjs sesindex'); return }
   try { hitlogRec({ t: query.slice(0, 40), at: Date.now(), src: 'sessearch', agent: agentArg }) } catch { }
-  const [qv] = await embed([query])
+  const [qv] = await embed([query], 'query')
   const qn = Math.sqrt(qv.reduce((a, x) => a + x * x, 0)) || 1
   const { hits, scored, vecMiss, noBin } = sesStreamTopK(qv, qn, top, agentArg)
   if (noBin) { console.log('[ses] 向量缓存与索引不匹配,重跑: node kb.cjs sesindex'); return }
@@ -1035,7 +1046,7 @@ async function main() {
     const meta = kbAllMeta('')
     if (!meta.length && !hasSes && !agentArg) { console.log(empty); return }
     try {
-      const [qv] = await embed([q])
+      const [qv] = await embed([q], 'query')
       const out = []
       if (meta.length || agentArg) {
         // kb 知识库路:专属检索=专属+公共合并去重,默认只查根库;recentBoost=常被想起的微加权(遗忘曲线逆操作)
