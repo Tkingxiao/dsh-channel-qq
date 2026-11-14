@@ -22,6 +22,10 @@ export declare class DmGate {
     /** 好友列表（带 30s 缓存；查不到按 null=不判断，保守放行走 pending 流程） */
     private friendsCache;
     private friendIds;
+    /** 出站私聊可达性判定（无副作用，不发通知不写状态）：admins / allowList /
+     *  主人审计放行过 / 好友 视为可主动联系——"除主人外不要私聊陌生人"里的
+     *  陌生人指名单外的人，名单里的人不算。 */
+    canReach(userId: number): Promise<boolean>;
     /** 判定：true=放行进 agent；false=已拦截（回复/通知已发出）。 */
     admit(userId: number, nickname: string): Promise<boolean>;
     private notifiedAt;

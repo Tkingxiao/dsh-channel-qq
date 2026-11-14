@@ -58,6 +58,19 @@ export class DmGate {
     return ids
   }
 
+  /** 出站私聊可达性判定（无副作用，不发通知不写状态）：admins / allowList /
+   *  主人审计放行过 / 好友 视为可主动联系——"除主人外不要私聊陌生人"里的
+   *  陌生人指名单外的人，名单里的人不算。 */
+  async canReach(userId: number): Promise<boolean> {
+    if (this.admins.includes(userId)) return true
+    if (this.config.allowList.includes(userId)) return true
+    if (!this.loaded) await this.load()
+    const rec = this.state[String(userId)]
+    if (rec?.status === 'approved') return true
+    const friends = await this.friendIds()
+    return friends !== null && friends.has(userId)
+  }
+
   /** 判定：true=放行进 agent；false=已拦截（回复/通知已发出）。 */
   async admit(userId: number, nickname: string): Promise<boolean> {
     if (!this.config.enabled) return true

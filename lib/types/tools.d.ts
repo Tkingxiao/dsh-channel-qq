@@ -25,4 +25,5 @@ export declare function registerQQTools(ctx: Context, config: QQChannelConfig, c
     report(delta: Record<string, number>, note: string): Promise<void>;
 }, dmGate?: {
     review(action: 'list' | 'approve' | 'deny', userId?: number): Promise<unknown>;
+    canReach(userId: number): Promise<boolean>;
 }): () => void;

@@ -134,7 +134,7 @@ export function isPersonaSignatureLeak(text: string): boolean {
   return list.some(w => lower.includes(w.toLowerCase()))
 }
 
-export function registerQQTools(ctx: Context, config: QQChannelConfig, client: OneBotClient, out: OutboundQueue, log: (line: string) => void, library?: EmojiLibrary, affection?: { book(delta: number, reason: string): Promise<unknown>; setStage(stage: string, event: string): Promise<{ ok: boolean; note: string }>; writeCustomHtml(html: string): Promise<void> }, sentLogFor?: (key: string) => Promise<SentLog>, knowledge?: KnowledgeStore, sixDim?: { report(delta: Record<string, number>, note: string): Promise<void> }, dmGate?: { review(action: 'list' | 'approve' | 'deny', userId?: number): Promise<unknown> }): () => void {
+export function registerQQTools(ctx: Context, config: QQChannelConfig, client: OneBotClient, out: OutboundQueue, log: (line: string) => void, library?: EmojiLibrary, affection?: { book(delta: number, reason: string): Promise<unknown>; setStage(stage: string, event: string): Promise<{ ok: boolean; note: string }>; writeCustomHtml(html: string): Promise<void> }, sentLogFor?: (key: string) => Promise<SentLog>, knowledge?: KnowledgeStore, sixDim?: { report(delta: Record<string, number>, note: string): Promise<void> }, dmGate?: { review(action: 'list' | 'approve' | 'deny', userId?: number): Promise<unknown>; canReach(userId: number): Promise<boolean> }): () => void {
   const disposers: Array<() => void> = []
 const memePackMatchFn = (desc: string): string | null => {
   try {
@@ -333,9 +333,15 @@ const memePackMatchFn = (desc: string): string | null => {
             throw new Error(`目标群 ${args.target} 不在咱的配置里（known: ${known.join(',')}）。发错窗口是大事故，先核对。`)
           }
         } else {
-          const master = config.admins[0]
-          if (master !== undefined && Number(args.target) !== master && !config.admins.includes(Number(args.target))) {
-            throw new Error(`私聊目标 ${args.target} 不是管理员。除主人外不要私聊陌生人。`)
+          const t = Number(args.target)
+          // 2026-11-14 owner 令："除主人外不要私聊陌生人"的陌生人=名单外的人。
+          // 管理员 / dmGate.allowList（主人在面板里放行的号）/ 审计放行过 / 好友
+          // 都可主动私聊；真正的名单外陌生人仍然拦下。
+          if (!config.admins.includes(t)) {
+            const reach = dmGate === undefined ? null : await dmGate.canReach(t).catch(() => false)
+            if (reach !== true) {
+              throw new Error(`私聊目标 ${t} 不在可私聊名单（管理员 / 门控放行名单 / 已审计放行 / 好友）。要主动私聊她：把她的 QQ 加进配置「门控放行名单」保存，或让她先给你发一条消息。`)
+            }
           }
         }
         // 2026-09-26 主人令：智能分段——按句号/段落一句一段地发，不再整坨

@@ -452,12 +452,16 @@ a { color: var(--acc); text-decoration: none; } a:hover { text-decoration: under
       <div class="pills" id="cfg-pills">
         <span class="pill" data-tab="trigger">触发与节奏</span>
         <span class="pill" data-tab="route">身份与路由</span>
-        <span class="pill" data-tab="access">群组与连接</span>
+        <span class="pill" data-tab="groupGate">群聊放行</span>
+        <span class="pill" data-tab="dmGate">私聊放行</span>
+        <span class="pill" data-tab="access">连接</span>
         <span class="pill" data-tab="fun">表情与交互</span>
       </div>
       <div class="card" data-cfg="trigger"><h2>触发与节奏 <span class="op"><span class="dirty-chip" data-dirty="trigger">有修改</span></span></h2><div class="form"></div></div>
       <div class="card" data-cfg="route"><h2>身份与路由 <span class="op"><span class="dirty-chip" data-dirty="route">有修改</span></span></h2><div class="form"></div></div>
-      <div class="card" data-cfg="access"><h2>群组与连接 <span class="op"><span class="dirty-chip" data-dirty="access">有修改</span></span></h2><div class="form"></div></div>
+      <div class="card" data-cfg="groupGate"><h2>群聊放行门控 <span class="op"><span class="dirty-chip" data-dirty="groupGate">有修改</span></span></h2><div class="form"></div></div>
+      <div class="card" data-cfg="dmGate"><h2>私聊放行门控 <span class="op"><span class="dirty-chip" data-dirty="dmGate">有修改</span></span></h2><div class="form"></div></div>
+      <div class="card" data-cfg="access"><h2>连接 <span class="op"><span class="dirty-chip" data-dirty="access">有修改</span></span></h2><div class="form"></div></div>
       <div class="card" data-cfg="fun"><h2>表情与交互 <span class="op"><span class="dirty-chip" data-dirty="fun">有修改</span></span></h2><div class="form"></div></div>
     </section>
 
@@ -669,23 +673,28 @@ const CFG_GROUPS = [
     { k: 'persona.peerName', label: '对群友的称呼', type: 'string' },
     { k: 'persona.pronoun', label: '自称代词', type: 'string' },
     { k: 'agentPreset', label: 'agent 预设', type: 'string', hint: '新窗口生效，存量会话不变' },
+    { k: 'admins', label: '管理员（主人）QQ（逗号分隔）', type: 'array', hint: '私聊直达+管理员指令权威，逗号分隔' },
     { k: 'workspacePath', label: '工作区路径', type: 'string', wide: true, hint: '新窗口生效' },
     { k: 'groupModel.provider', label: '群聊独立模型 provider', type: 'nullable', hint: '留空=跟随默认路由' },
     { k: 'groupModel.model', label: '群聊独立模型 model', type: 'nullable', hint: '留空=跟随默认路由' },
+  ]},
+  { id: 'groupGate', fields: [
+    { k: 'primaryGroup', label: '主群', type: 'nullable', hint: '核心群：talkValue/表情/偷图语义都挂在它上面' },
+    { k: 'extraGroups', label: '游历群白名单（逗号分隔）', type: 'array', hint: '可发言但非主群；白名单外的群消息在入口直接过滤，不进模型' },
+    { k: 'groupEnabled', label: '群聊总开关', type: 'boolean', hint: '关=所有群消息都不处理（私聊不受影响）' },
+  ]},
+  { id: 'dmGate', fields: [
+    { k: 'dmGate.enabled', label: '陌生人私聊门控', type: 'boolean', hint: '非 admins / 非好友 / 非放行名单 先过审' },
+    { k: 'dmGate.allowList', label: '私聊放行名单（逗号分隔）', type: 'array', hint: '名单内的号：私聊直达，bot 也可主动私聊她' },
+    { k: 'dmGate.notifyAdmin', label: '待审通知主人', type: 'boolean' },
+    { k: 'dmGate.groupAlert', label: '陌生群预警', type: 'boolean', hint: '白名单外的群来消息时私聊通知主人；群多时可关' },
+    { k: 'dmGate.pendingReply', label: '给陌生人的统一回复', type: 'string', wide: true },
   ]},
   { id: 'access', fields: [
     { k: 'connection.mode', label: '连接协议', type: 'select', options: [['forward', '正向 WS · 本机主动连接 OneBot'], ['reverse', '反向 WS · 本机开端口等 NapCat 接入']], hint: '改协议保存后自动重连；反向模式监听 WS 地址里的端口' },
     { k: 'connection.url', label: 'OneBot WS 地址', type: 'string', wide: true, hint: '保存后自动重连' },
     { k: 'connection.accessToken', label: 'AccessToken', type: 'secret', hint: '留空 = 不修改' },
     { k: 'selfId', label: 'bot QQ 号 selfId', type: 'number', step: 1 },
-    { k: 'primaryGroup', label: '主群', type: 'nullable', hint: '留空=未设置' },
-    { k: 'extraGroups', label: '附加群（逗号分隔）', type: 'array' },
-    { k: 'admins', label: '管理员（逗号分隔）', type: 'array' },
-    { k: 'dmGate.allowList', label: '门控放行名单（逗号分隔）', type: 'array' },
-    { k: 'dmGate.enabled', label: '陌生人门控', type: 'boolean', hint: '陌生人待审 + 主人通知' },
-    { k: 'dmGate.notifyAdmin', label: '待审通知主人', type: 'boolean' },
-    { k: 'dmGate.groupAlert', label: '陌生群预警', type: 'boolean', hint: '白名单外的群来消息时私聊通知主人；群多时可关' },
-    { k: 'dmGate.pendingReply', label: '给陌生人的统一回复', type: 'string', wide: true },
   ]},
   { id: 'fun', fields: [
     { k: 'emoji.steal', label: '偷图入库', type: 'boolean', hint: '主群图片自动收进表情库' },
