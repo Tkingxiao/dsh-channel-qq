@@ -115,6 +115,10 @@ export function isInnerMonologueLeak(text: string): boolean {
   if (t.length > 20 && inner.length >= t.length * 0.5) return true
   // 内部盘算关键词 + 舞台括号 同现
   if (/[（(]/.test(t) && /(战况分析|守则照旧|后台|盘算|内心|这轮先闭嘴|饭点不追)/.test(t)) return true
+  // 2026-11-14 卡点：短舞台指示（（都在聊电竞，本喵继续装睡）喵。）绕过长度闸——
+  // 剥掉全部括号段与句尾语气词后几乎不剩内容 = 纯独白泄漏，拦下
+  const stripped = t.replace(/[（(][^（）()]*/g, '').replace(/[）)]/g, '').replace(/[喵呢哇嘿呜哈~～。.!！？?、，]/g, '').replace(/\s/g, '')
+  if (t.length >= 6 && stripped.length <= 2) return true
   return false
 }
 
