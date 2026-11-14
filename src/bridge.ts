@@ -670,6 +670,14 @@ ${prompt}`)
    * queueing behind the running turn — that is the queueing we are avoiding.
    */
   private async flushNow(conversation: Conversation, opts: { immediate: boolean }): Promise<void> {
+    if (conversation.isGroup && this.config.groupEnabled === false) {
+      const dropped = conversation.queue.length
+      conversation.queue = []
+      conversation.pendingImages = []
+      conversation.calledLine = false
+      if (dropped > 0) this.log(`batch of ${dropped} dropped: groupEnabled=false`)
+      return
+    }
     if (conversation.batchTimer !== null) {
       clearTimeout(conversation.batchTimer)
       conversation.batchTimer = null

@@ -173,6 +173,8 @@ export class Scheduler {
 
   private async patrol(): Promise<void> {
     if (this.groupConversationKey === null) return
+    // 2026-11-15 owner 令：群聊总开关关闭时，巡逻也不进群（否则关了还在说话）
+    if (this.config.groupEnabled === false) return
     const now = new Date()
     const ctx = timeContext(now)
     // Night silence: no patrols 01:00-07:30.
@@ -182,6 +184,8 @@ export class Scheduler {
   }
 
   private async dream(): Promise<void> {
+    // 2026-11-15 owner 令：群聊总开关关闭时做梦也不发主群消息
+    if (this.config.groupEnabled === false) return
     const now = new Date()
     if (now.getHours() !== 4) return
     const key = `dream-${now.toISOString().slice(0, 10)}`
