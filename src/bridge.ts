@@ -38,6 +38,7 @@ import { asSessionId, type AgentLike, type AgentPresetsService, type AgentsCreat
 import type { OneBotClient } from './onebot.js'
 import type { PersonaConfig } from './config.js'
 import { timeContext } from './scheduler.js'
+import { rememberImageRef } from './image-refs.js'
 import { SentLog } from './sent-log.js'
 import { transcribeVoiceMessage } from './stt.js'
 import type { OneBotEvent } from './types.js'
@@ -1127,6 +1128,7 @@ async function attachImages(ctx: Context, config: QQChannelConfig, client: OneBo
       const ref = await ((ctx as unknown as { attachments: {
         saveImage(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<unknown>
       } }).attachments).saveImage({ data: bytes, mediaType, name: `qq-image.${mediaType.slice(6)}` })
+      rememberImageRef(ref)
       refs.push(ref)
       log(`image attached (${Math.round(bytes.length / 1024)} KB, ${mediaType})`)
     } catch (error) {

@@ -38,8 +38,6 @@ export class EmojiStore {
     const url = parsed.imageUrls[0]
     if (url === undefined) return null
     try {
-      const ext = path.extname(new URL(url).pathname).replace(/[^.\w]/g, '') || '.png'
-      const target = path.join(this.dir, `stolen_${Date.now()}_${randomUUID().slice(0, 8)}${ext}`)
       const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const buf = Buffer.from(await res.arrayBuffer())
@@ -96,6 +94,8 @@ export class EmojiStore {
           return null
         }
       }
+      // 2026-11-14 卡点1修复：入库按真实格式命名扩展名（QQ CDN 常把 gif/jpg 存成 .png，骗过按扩展名校验的环节）
+      const target = path.join(this.dir, `stolen_${Date.now()}_${randomUUID().slice(0, 8)}.${real}`)
       await fs.writeFile(target, buf)
       this.log(`stole sticker → ${path.basename(target)}`)
       if (this.library !== undefined) {

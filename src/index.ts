@@ -160,6 +160,28 @@ export class ChannelQQ extends Service {
     this.client.start()
     // 登录即同步 QQ 收藏表情到本地（fetch_custom_face_detail；失败仅记日志，下次用时重试）
     void syncStickerLibrary(this.client, true).then((list) => { if (list) this.log(`QQ 收藏表情已同步：${list.length} 条`) }).catch(() => {})
+    // 表情库补扫 + 逐步补打标（2026-11-14 卡点3）：手动拷入/漏标的图补入库；
+    // 无标签的条目每次启动最多补 3 张视觉调用，控制成本
+    void (async () => {
+      try {
+        const emojiLib = this.emojiLibrary
+        if (!emojiLib) return
+        const rescan = await emojiLib.rescan()
+        if (rescan.added > 0) this.log(`emoji rescan: +${rescan.added} 新入库（重复 ${rescan.duplicates}）`)
+        const fsp = await import('node:fs/promises')
+        const untagged = emojiLib.list(200).filter((e) => e.tags.length === 0).slice(0, 3)
+        for (const e of untagged) {
+          try {
+            const buf = await fsp.readFile(e.file)
+            const isP = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50
+            const isG = buf.length > 3 && buf[0] === 0x47
+            const mediaType = isP ? 'image/png' : isG ? 'image/gif' : 'image/jpeg'
+            await emojiLib.tagEntry(this.ctx, e, buf, mediaType)
+            this.log(`emoji re-tagged: ${e.file.split(/[\/]/).pop()} (md5 ${e.md5.slice(0, 8)})`)
+          } catch { /* 单张失败不阻断 */ }
+        }
+      } catch (e) { this.log(`emoji rescan failed: ${e instanceof Error ? e.message : String(e)}`) }
+    })()
     // 主窗直发桥（owner 令"直接连上 QQ 客户端发"）：绕过回合队列直达 OneBot。
     // 仅绑 127.0.0.1；key 从环境变量读取（部署者自选任意密钥注入）；只允许私聊 admins / 群聊 primaryGroup+extraGroups。
     const bridgeKey = process.env.CHANNEL_QQ_BRIDGE_KEY ?? ''

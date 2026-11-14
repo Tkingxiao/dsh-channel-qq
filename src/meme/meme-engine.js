@@ -27,6 +27,7 @@ import {
   scanRowFor, walkPackImages, ensurePackAt, movePackEntries, isInsidePluginPackage,
 } from './memes.js'
 import { ANIM_DEFAULT_FRAMES, detectAnimation, buildAnimationFilmstrip, animationModelNote } from './anim.js'
+import { findImageRef } from '../image-refs.js'
 
 // ---- 极简 ZIP(store 无压缩)读写:零依赖导出/导入图库包 ----
 const CRC_TABLE = (() => {
@@ -1015,7 +1016,7 @@ export function apply(ctx, config) {
         '用户刚发的图片附件:直接调用即可,不必传 attachmentId(id 不会出现在 prompt 里,默认收录最近一张用户图)。也可用 attachmentId 或 http(s) imageUrl。',
       parameters: {
         attachmentId: { type: 'string', description: '可选。对话附件 id;不传则收录最近一张用户图片' },
-        imageUrl: { type: 'string', description: '可选。图片 http(s) URL,与附件二选一' },
+        imageUrl: { type: 'string', description: '可选。图片 http(s) URL / 本地绝对路径 / file://，与附件二选一' },
         tag: { type: 'string', description: '手动指定分类,如 angry/happy(可选,默认自动识别)' },
         caption: { type: 'string', description: '手动指定描述(可选,默认自动识别)' },
         keywords: { type: 'string', description: '手动指定搜索关键词,空格分隔(可选,默认自动识别)' },
@@ -1037,10 +1038,14 @@ export function apply(ctx, config) {
           let ext
           let refName = '' // 附件原始文件名:附件是 .gif 而字节不是 GIF = 聊天通道压平了动图
           if (!imageUrl) {
+            // 2026-11-14 卡点2a：登记簿优先——channel-qq 收图时登记过 ref，两轮前的附件也能按 id 查到
+            const regRef = attachmentId ? findImageRef(attachmentId) : undefined
             const refs = userImageRefs(exec)
-            const ref = attachmentId
-              ? refs.find((r) => String(r.attachmentId) === attachmentId)
-              : refs[refs.length - 1]
+            const ref = regRef !== undefined
+              ? regRef
+              : attachmentId
+                ? refs.find((r) => String(r.attachmentId) === attachmentId)
+                : refs[refs.length - 1]
             if (!ref) {
               return { ok: false, message: attachmentId
                 ? '找不到附件 ' + attachmentId + '(必须是本次对话上传的图片)'
@@ -1059,8 +1064,20 @@ export function apply(ctx, config) {
             fileName = stored.ref.name || 'meme' + ext
             refName = String(stored.ref.name || '')
           } else {
-            if (!/^https?:\/\//i.test(imageUrl)) return { ok: false, message: 'imageUrl 必须是 http(s) 链接' }
-            const res = await fetch(imageUrl, { signal: AbortSignal.timeout(15000), redirect: 'follow' })
+            let urlPath = imageUrl
+            if (/^file:\/\//i.test(urlPath)) { try { urlPath = fileURLToPath(urlPath) } catch { } }
+            if (!/^https?:\/\//i.test(urlPath)) {
+              // 2026-11-14 卡点2b：支持本地绝对路径/file://（本机部署，直接读盘）
+              let buf0
+              try { buf0 = readFileSync(resolve(urlPath)) } catch (e) { return { ok: false, message: '本地文件读取失败: ' + String(e && e.message || e).slice(0, 120) } }
+              if (buf0.byteLength === 0 || buf0.byteLength > 8 * 1024 * 1024) return { ok: false, message: '图片大小超限(≤8MB)' }
+              buf = buf0
+              mime = sniffImageMime(buf) || 'image/png'
+              ext = extByMime(mime) || '.jpg'
+              fileName = basename(urlPath)
+              refName = basename(urlPath)
+            } else {
+            const res = await fetch(urlPath, { signal: AbortSignal.timeout(15000), redirect: 'follow' })
             if (!res.ok) return { ok: false, message: '下载失败: HTTP ' + res.status }
             const ctype = String(res.headers.get('content-type') || '')
             const m = /image\/(jpeg|png|gif|webp)/.exec(ctype)
@@ -1072,6 +1089,7 @@ export function apply(ctx, config) {
             mime = sniffImageMime(buf) || declared
             ext = extByMime(mime) || '.jpg'
             fileName = imageUrl.split('/').pop() || 'meme' + ext
+            }
           }
           if (buf.byteLength === 0 || buf.byteLength > 8 * 1024 * 1024) return { ok: false, message: '图片大小超限(≤8MB)' }
           // 未指定分类时自动识图(学图即识图)
