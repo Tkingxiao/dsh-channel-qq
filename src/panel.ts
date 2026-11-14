@@ -12,7 +12,7 @@
  * POST /channel-qq-api/reconnect → OneBotClient.forceReconnect()（重置退避并立即重拨）
  */
 
-import { readFileSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describeClient } from './client-compat.js'
@@ -107,29 +107,47 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
   // ---- 文件浏览（只读，沙箱限制在固定根目录内） ----
 
   // ---- 日记（生活引擎 self/90-日记/*.md）----
-  const DIARY_DIR = () => path.join(config.workspacePath || path.join(dshHome, 'channel-qq-workspace'), 'self', '90-日记')
   const DIARY_MAX_ENTRIES = 60
   const DIARY_TEXT_MAX = 20 * 1024
 
-  function readDiaryDir(dir: string, demo: boolean) {
+  // ---- 真实工作区解析：跟生活引擎的实际落盘保持一致 ----
+  // 引擎有效工作区 = 会话 cwd 或 <dshHome>/workspace（tongling-life/config.json 的
+  // workspace 只是回退值，实测真数据在 <dshHome>/workspace）。这里按“谁真有 self/
+  // 或 .life/ 内容”选目录，避免落到只有 MEMORY.md 的占位目录、进而回落演示数据。
+  function readLifeCfgWorkspace(): string | null {
+    try {
+      const cfg = JSON.parse(readFileSync(path.join(dshHome, 'tongling-life', 'config.json'), 'utf8')) as { workspace?: string }
+      return typeof cfg.workspace === 'string' && cfg.workspace.trim() !== '' ? cfg.workspace : null
+    } catch { return null }
+  }
+  function dirHasEntries(dir: string): boolean {
+    try { return readdirSync(dir).length > 0 } catch { return false }
+  }
+  function resolveWorkspaceBase(): string {
+    const candidates = [readLifeCfgWorkspace(), config.workspacePath || null, path.join(dshHome, 'workspace')]
+    for (const c of candidates) {
+      if (!c) continue
+      if (dirHasEntries(path.join(c, 'self')) || dirHasEntries(path.join(c, '.life'))) return c
+    }
+    return candidates.find((c) => c !== null) ?? path.join(dshHome, 'workspace')
+  }
+
+  function readDiaryDir(dir: string) {
     let names: string[] = []
     try { names = readdirSync(dir).filter((n) => /^\d{4}-\d{2}-\d{2}\.md$/.test(n)) } catch { names = [] }
-    const entries: Array<{ date: string; size: number; mtime: number; text: string; demo?: boolean }> = []
+    const entries: Array<{ date: string; size: number; mtime: number; text: string }> = []
     for (const name of names.sort().reverse().slice(0, DIARY_MAX_ENTRIES)) {
       try {
         const st = statSync(path.join(dir, name))
         const buf = readFileSync(path.join(dir, name))
-        entries.push({ date: name.slice(0, 10), size: st.size, mtime: st.mtimeMs, text: buf.subarray(0, DIARY_TEXT_MAX).toString('utf8'), ...(demo ? { demo: true } : {}) })
+        entries.push({ date: name.slice(0, 10), size: st.size, mtime: st.mtimeMs, text: buf.subarray(0, DIARY_TEXT_MAX).toString('utf8') })
       } catch { /* raced deletion */ }
     }
     return entries
   }
 
   function listDiary() {
-    // [local/demo] 工作区还没有日记时，回落到演示目录（panel-demo），条目带 demo 标记
-    const entries = readDiaryDir(DIARY_DIR(), false)
-    if (entries.length > 0) return entries
-    return readDiaryDir(path.join(dshHome, 'panel-demo', 'self', '90-日记'), true)
+    return readDiaryDir(path.join(resolveWorkspaceBase(), 'self', '90-日记'))
   }
 
   // ---- 情感 / 知识库 / 自我文件 / 任务流 ----
@@ -140,8 +158,12 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
   const SELF_DOCS = ['99-种子.md', '95-成长层.md', '85-心境.md', 'user心智模型.md', '自我认知.md', 'user画像.md'] as const
   const DOC_TEXT_MAX = 32 * 1024
 
+  function agentWorkspaceDir(): string {
+    return config.workspacePath || path.join(dshHome, 'channel-qq-workspace')
+  }
+
   function workspaceDir(...parts: string[]): string {
-    return path.join(config.workspacePath || path.join(dshHome, 'channel-qq-workspace'), ...parts)
+    return path.join(resolveWorkspaceBase(), ...parts)
   }
 
   function readAffection() {
@@ -157,26 +179,21 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
       const parsed = readJsonSafe(workspaceDir('knowledge', 'entries.json'))
       if (Array.isArray(parsed)) entries = parsed
     } catch { entries = [] }
-    // [local/demo] 空库时回落演示数据（panel-demo），条目带 demo 标记
-    if (entries.length === 0) {
-      try {
-        const demo = readJsonSafe(path.join(dshHome, 'panel-demo', 'knowledge', 'entries.json'))
-        if (Array.isArray(demo)) entries = demo.map((e) => ({ ...e, demo: true }))
-      } catch { /* no demo */ }
-    }
     return { ok: true as const, entries }
   }
 
   function readSelfDocs() {
-    // [local/demo] 工作区缺文件时逐文件回落 panel-demo（带 demo 标记），她写了真文件即自动顶掉
-    return SELF_DOCS.map((name) => {
+    // 只读真实文件：生活引擎的 self 文档来自实际落盘的工作区；MEMORY.md 是
+    // agent 在 DSH 工作区（workspacePath）自己维护的记忆文件，目录不同，单独读取。
+    const docs: Array<{ name: string; text: string | null }> = SELF_DOCS.map((name) => {
       let text: string | null = null
-      let demo = false
-      try { text = readFileSync(workspaceDir('self', name), 'utf8').slice(0, DOC_TEXT_MAX) } catch {
-        try { text = readFileSync(path.join(dshHome, 'panel-demo', 'self', name), 'utf8').slice(0, DOC_TEXT_MAX); demo = true } catch { text = null }
-      }
-      return { name, text, ...(demo ? { demo: true } : {}) }
+      try { text = readFileSync(workspaceDir('self', name), 'utf8').slice(0, DOC_TEXT_MAX) } catch { text = null }
+      return { name, text }
     })
+    let memory: string | null = null
+    try { memory = readFileSync(path.join(agentWorkspaceDir(), 'MEMORY.md'), 'utf8').slice(0, DOC_TEXT_MAX) } catch { memory = null }
+    docs.unshift({ name: 'MEMORY.md', text: memory })
+    return docs
   }
 
   function listInteractions() {
@@ -187,16 +204,52 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
         try { events.push(JSON.parse(line)) } catch { /* skip bad line */ }
       }
     } catch { events = [] }
-    // [local/demo] 空流时回落演示数据
-    if (events.length === 0) {
-      try {
-        const lines = readFileSync(path.join(dshHome, 'panel-demo', 'knowledge', 'interactions.jsonl'), 'utf8').split('\n').filter(Boolean)
-        for (const line of lines.slice(-300)) {
-          try { events.push({ ...JSON.parse(line), demo: true }) } catch { /* skip */ }
-        }
-      } catch { /* no demo */ }
-    }
     return { ok: true as const, events }
+  }
+
+  // ---- 黑话词库（dsh-memu-memory lexicon/*.json：浏览 + 词条微调） ----
+  const MEMU_LEXICON_DIR = path.join(dshHome, 'dsh-memu-memory', 'lexicon')
+
+  function readLexiconLibrary(file: string): { file: string; libraryId: string; terms: any[]; rejected: any[] } | null {
+    if (!/^[\w.-]+\.json$/.test(file)) return null // 只允许目录内文件名，防路径穿越
+    let data: any
+    try { data = JSON.parse(readFileSync(path.join(MEMU_LEXICON_DIR, file), 'utf8')) } catch { return null }
+    if (!data || typeof data !== 'object') return null
+    const toList = (m: any) => Object.entries(m ?? {}).map(([id, t]: [string, any]) => ({ id, ...(typeof t === 'object' && t ? t : {}) }))
+    return {
+      file,
+      libraryId: String(data.libraryId ?? file.replace(/\.json$/, '')),
+      terms: toList(data.terms),
+      rejected: toList(data.rejected),
+    }
+  }
+
+  function listLexicon() {
+    let files: string[] = []
+    try { files = readdirSync(MEMU_LEXICON_DIR).filter((f) => f.endsWith('.json')) } catch { files = [] }
+    const libraries = files.map((f) => readLexiconLibrary(f)).filter((l) => l !== null)
+    return { ok: true as const, libraries }
+  }
+
+  function saveLexiconTerm(body: any): { ok: true; saved: string[] } {
+    const file = typeof body?.libraryFile === 'string' ? body.libraryFile : ''
+    const termId = typeof body?.termId === 'string' ? body.termId : ''
+    const patch = body?.patch ?? {}
+    if (readLexiconLibrary(file) === null) throw new Error('词库文件不存在或不可读')
+    // 只允许面板暴露的字段
+    const clean: Record<string, unknown> = {}
+    for (const k of ['meaning', 'usage', 'aliases', 'examples', 'status'] as const) {
+      if (patch[k] !== undefined) clean[k] = patch[k]
+    }
+    const raw = JSON.parse(readFileSync(path.join(MEMU_LEXICON_DIR, file), 'utf8'))
+    const bucket = raw?.terms?.[termId] !== undefined ? raw.terms : (raw?.rejected?.[termId] !== undefined ? raw.rejected : null)
+    if (bucket === null) throw new Error('词条不存在: ' + termId)
+    Object.assign(bucket[termId], clean, { updatedAt: new Date().toISOString() })
+    // 原子回写；memu 的读取侧按 mtime 感知进程外改动
+    const tmp = path.join(MEMU_LEXICON_DIR, file + '.tmp')
+    writeFileSync(tmp, JSON.stringify(raw, null, 2))
+    renameSync(tmp, path.join(MEMU_LEXICON_DIR, file))
+    return { ok: true, saved: Object.keys(clean) }
   }
 
   // ---- log tail ----
@@ -272,6 +325,23 @@ export function registerPanel(ctx: Context, config: QQChannelConfig, dshHome: st
       method: 'GET', path: '/channel-qq-api/knowledge',
       handler: (_req, res) => {
         json(res, 200, listKnowledge())
+      },
+    },
+    {
+      method: 'GET', path: '/channel-qq-api/lexicon',
+      handler: (_req, res) => {
+        json(res, 200, listLexicon())
+      },
+    },
+    {
+      method: 'POST', path: '/channel-qq-api/lexicon/save',
+      handler: async (req, res) => {
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}')
+          json(res, 200, saveLexiconTerm(body))
+        } catch (e) {
+          json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) })
+        }
       },
     },
     {
