@@ -48,6 +48,9 @@ export interface BatchingConfig {
     maxMessages: number;
     /** Flush early once this many characters accumulated. */
     maxChars: number;
+    /** 私聊连发攒批窗（2026-11-15 owner 令）：连发多条时等这段静默再合并成一包统一回应，
+     *  治"一条消息一个回合、待发口逐条各回"的节奏问题。0=关（逐条直发，旧行为）。 */
+    dmWindowMs: number;
 }
 export interface InjectModeConfig {
     /** Bypass batching: every group message is injected into the agent context as it arrives. */
@@ -79,6 +82,12 @@ export interface PersonaConfig {
     peerName: string;
     /** The bot's self-pronoun in speech (e.g. 咱). */
     pronoun: string;
+}
+/** 回复字数范围（2026-11-15 owner 令）：正文控制在 min~max 字，尽量向下限靠、宁短勿长。
+ *  min 只做提示层引导；max 是硬闸——超限的发送会被拦下要求精简重发。null=不限制。 */
+export interface ReplyLengthConfig {
+    min: number;
+    max: number;
 }
 export interface QQChannelConfig {
     connection: ConnectionConfig;
@@ -112,6 +121,19 @@ export interface QQChannelConfig {
     permissionPreset: string;
     rateLimitMs: number;
     maxMessageLength: number;
+    /** 回复字数范围（2026-11-15 owner 令）：null=不限制。 */
+    replyLength: ReplyLengthConfig | null;
+    /** 好感度上限（2026-11-16 owner 令）：null=无上限（可超百）；设数值则封顶。 */
+    /** ComfyUI 生图接入（2026-11-16 owner 令）：url 指向 ComfyUI HTTP API；
+     *  templatesDir 存「另存为(API格式)」导出的 workflow JSON（默认 ~/.dsh/comfyui-templates）；
+     *  defaultTemplate 不设则每次必须显式指定模板。 */
+    comfyui?: {
+        url?: string;
+        templatesDir?: string | null;
+        defaultTemplate?: string | null;
+        timeoutMs?: number;
+    };
+    affectionMax?: number | null;
     segmentation: SegmentationConfig;
     batching: BatchingConfig;
     injectMode: InjectModeConfig;

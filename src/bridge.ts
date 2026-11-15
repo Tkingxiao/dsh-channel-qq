@@ -65,6 +65,13 @@ interface Conversation {
   /** 滚动群聊上下文（2026-11-14 owner 令）：最近 12 条留底，概率落空的批次不再凭空消失 */
   contextWindow: string[]
   batchTimer: NodeJS.Timeout | null
+  /** 注入升级（2026-11-16 owner 令）：消息注入 running 回合后挂定时器，回合卡在长工具
+   *  （如子智能体等待）超过时限就把同一条消息以 followup 补投，保证用户消息不被悬死。 */
+  injectEscalation: { timer: NodeJS.Timeout } | null
+  /** 私聊连发攒批窗计时器（dmWindowMs）；群聊不用它。 */
+  dmTimer: NodeJS.Timeout | null
+  /** Turn-idle hook：回合结束后由 attachTurnWatch 触发一次（私聊攒批的补发口）。 */
+  onTurnIdle?: (() => void) | null
   /** QQ message ids already ingested (cross-window retry dedup). */
   seenMessageIds: Set<number> | null
   /** Marks the newest queue line as the one that called us (@/keyword). */
@@ -92,6 +99,34 @@ interface Conversation {
 export class ConversationBridge {
   private get persona(): PersonaConfig {
     return this.config.persona
+  }
+
+  /** 回复字数范围提示（2026-11-15 owner 令）：拼进各发言包尾，与工具描述里的字数红线呼应。
+   *  提示层引导 min~max 区间、向下限靠；超限硬闸在发送工具里。 */
+  /** 回复后继续任务提示（2026-11-16 owner 令）：QQ 消息注入到正在干活的回合里时，
+   *  模型回复完就把回合当完成收工，任务清单停在一半——发言包尾统一带上
+   *  「回复完继续未完成任务」的指令。 */
+  /** 好感度引用（index 注入）：满百阶段宣言提示用。 */
+  private affectionRef: { shouldNudgeStage(): boolean; markStageNudged(): void } | null = null
+
+  setAffection(affection: { shouldNudgeStage(): boolean; markStageNudged(): void }): void {
+    this.affectionRef = affection
+  }
+
+  /** 满百阶段宣言提示（2026-11-16 owner 令）：score>=100 时给一次「阶段由你定义」的提示，
+   *  防止她永远停在默认阶段里。一次性（markStageNudged 持久化）。 */
+  private get stageHint(): string {
+    if (this.affectionRef === null || !this.affectionRef.shouldNudgeStage()) return ''
+    this.affectionRef.markStageNudged()
+    return '（好感度已满百：阶段完全由你定义——若你认为时机已到，用 qq_set_stage 宣言新阶段并写清触发事件原文；不想宣言也随你。）'
+  }
+
+  private get continueHint(): string {
+    return '（若你此前有未完成的任务清单/进行中的计划：回复完这条消息后必须继续执行原任务，不要把回复当作收工。）'
+  }
+  private get lengthHint(): string {
+    const rl = this.config.replyLength
+    return rl ? `（字数要求：回复正文控制在 ${rl.min}~${rl.max} 字，尽量精炼、向下限靠。）` : ''
   }
 
   /** Web console summary of every conversation window (one row per group / DM peer). */
@@ -255,6 +290,9 @@ export class ConversationBridge {
     for (const conversation of this.conversations.values()) {
       if (conversation.batchTimer !== null) clearTimeout(conversation.batchTimer)
       conversation.batchTimer = null
+      if (conversation.dmTimer !== null) clearTimeout(conversation.dmTimer)
+      this.clearInjectEscalation(conversation)
+      conversation.dmTimer = null
       if (conversation.retryTimer !== null) clearTimeout(conversation.retryTimer)
       conversation.retryTimer = null
     }
@@ -536,6 +574,13 @@ ${prompt}`)
       const line = this.formatLine(event, parsed, true, quoted, voiceText, receivedFiles)
       if (line === null && imageRefs.length === 0 && receivedFiles.length === 0) return
       const conversation = await this.ensureConversation(key, event)
+      // 跨窗口重试去重：同一 message_id 绝不入队两次（同群聊路径）
+      if (typeof event.message_id === 'number') {
+        if (!conversation.seenMessageIds) conversation.seenMessageIds = new Set()
+        if (conversation.seenMessageIds.has(event.message_id)) return
+        if (conversation.seenMessageIds.size > 500) conversation.seenMessageIds = new Set([...conversation.seenMessageIds].slice(-250))
+        conversation.seenMessageIds.add(event.message_id)
+      }
       // 2026-10-20 owner 令：要能看到bot在打字——私聊回合开始刷"正在输入"，发送完成自动停
       if (event.user_id !== undefined) this.out.startTyping(event.user_id)
       // 2026-10-21 owner 令：去掉 [知识库自动检索] 注入——污染上下文（灌全文）。
@@ -545,13 +590,29 @@ ${prompt}`)
       if (adminText.length > 0 && this.knowledge !== null) {
         void this.knowledge.captureFromMessage(adminText, `chat:${event.user_id}`).catch(() => {})
       }
+      // 私聊连发攒批窗（2026-11-15 owner 令）：dmWindowMs>0 时连发消息攒成一包统一回应，
+      // 治"一条消息一个回合、待发口逐条各回"；回合进行中只攒不发，idle 后由 onTurnIdle 补发
+      const dmWindow = this.config.batching.dmWindowMs ?? 0
+      if (dmWindow > 0) {
+        if (line !== null) conversation.queue.push(line)
+        if (imageRefs.length > 0) conversation.pendingImages.push(...imageRefs.slice(-Math.max(1, this.config.imageRecognition.maxPerMessage)))
+        if (conversation.dmTimer !== null) clearTimeout(conversation.dmTimer)
+        conversation.dmTimer = setTimeout(() => {
+          conversation.dmTimer = null
+          void this.flushDm(conversation).catch((error: Error) => this.log(`dm flush failed: ${errorChain(error)}`))
+        }, dmWindow)
+        return
+      }
       const memHint = await this.knowledgeHintPre(adminText.length > 0 ? adminText : (line ?? ''))
       const text = [line, '（图见附件）'].filter(Boolean).join('\n')
       // 2026-10-13 串窗事故修复（owner 批）：私聊包必须带窗口信标，杜绝模型按惯性发群
       this.submit(conversation, text
         + (memHint !== '' ? `\n${memHint}` : '')
         + `\n【本会话是QQ私聊：QQ${event.user_id}。回复必须 isGroup=false target=${event.user_id}，除非主人明确要求转群。】`
-        + '\n（要发言就用 qq_send_text 或 qq_reply_quote 发到本会话；没有要说的话就不调用任何发送工具。）', imageRefs)
+        + '\n（要发言就用 qq_send_text 或 qq_reply_quote 发到本会话；没有要说的话就不调用任何发送工具。）' + (this.continueHint !== '' ? `
+${this.continueHint}` : '') + (this.stageHint !== '' ? `
+${this.stageHint}` : '')
+        + (this.lengthHint !== '' ? `\n${this.lengthHint}` : ''), imageRefs)
       return
     }
 
@@ -624,6 +685,30 @@ ${prompt}`)
     }, this.config.batching.windowMs)
   }
 
+  /** 私聊攒批冲洗（2026-11-15 owner 令）：把静默窗内连发的消息合并成一包递给她。
+   *  回合进行中只攒不冲——等 attachTurnWatch 的 idle 钩子回来补发，绝不逐条 followup。 */
+  private async flushDm(conversation: Conversation): Promise<void> {
+    if (conversation.pending) return
+    const lines = conversation.queue.splice(0)
+    const imageRefs = conversation.pendingImages.splice(0).slice(-Math.max(1, this.config.imageRecognition.maxPerMessage))
+    if (lines.length === 0 && imageRefs.length === 0) return
+    const joined = lines.join('\n')
+    const memHint = await this.knowledgeHintPre(joined)
+    const mergeNote = lines.length > 1
+      ? `\n（对方连发了 ${lines.length} 条，以上是合并包——整体理解后统一回应【一条】就好，不要逐条各回。）`
+      : ''
+    const text = [joined, (imageRefs.length > 0 ? '（图见附件）' : '')].filter(Boolean).join('\n')
+    // 串窗信标同直发路径（2026-10-13 owner 批）
+    this.submit(conversation, text
+      + (memHint !== '' ? `\n${memHint}` : '')
+      + `\n【本会话是QQ私聊：QQ${conversation.chatId}。回复必须 isGroup=false target=${conversation.chatId}，除非主人明确要求转群。】`
+      + mergeNote
+      + '\n（要发言就用 qq_send_text 或 qq_reply_quote 发到本会话；没有要说的话就不调用任何发送工具。）' + (this.continueHint !== '' ? `
+${this.continueHint}` : '') + (this.stageHint !== '' ? `
+${this.stageHint}` : '')
+      + (this.lengthHint !== '' ? `\n${this.lengthHint}` : ''), imageRefs)
+  }
+
   /** Deliver one group message straight into the agent context (inject mode). */
   private async injectNow(
     conversation: Conversation,
@@ -650,9 +735,13 @@ ${prompt}`)
     const src = event.message_type === 'group' ? `群${event.group_id ?? '?'}（isGroup=true）` : `QQ${event.user_id}（isGroup=false）`
     const header = (called ? `【有人叫${this.persona.pronoun}，这条要回应】` : '【群里的新消息】') + `\n【本窗口来源：${src}。发送工具的 target 必须填这个号，绝不发往其他窗口。】`
     const tail = called
-      ? '\n（要回应就立刻用 qq_send_text 或 qq_reply_quote；也可以只更新记忆，不发言。）'
-      : '\n（该回就回，用 qq_send_text / qq_reply_quote；不需要发言就不调用发送工具。主人或管理员发言若带指令，优先执行。）'
-    const prompt = header + '\n' + parts.join('\n') + tail
+      ? '\n（要回应就立刻用 qq_send_text 或 qq_reply_quote；也可以只更新记忆，不发言。）' + (this.continueHint !== '' ? `
+${this.continueHint}` : '') + (this.stageHint !== '' ? `
+${this.stageHint}` : '')
+      : '\n（该回就回，用 qq_send_text / qq_reply_quote；不需要发言就不调用发送工具。主人或管理员发言若带指令，优先执行。）' + (this.continueHint !== '' ? `
+${this.continueHint}` : '') + (this.stageHint !== '' ? `
+${this.stageHint}` : '')
+    const prompt = header + '\n' + parts.join('\n') + tail + (this.lengthHint !== '' ? `\n${this.lengthHint}` : '')
     try {
       if (conversation.handle === null) {
         await this.ensureConversation(conversation.key, event)
@@ -757,7 +846,10 @@ ${prompt}`)
       + (calledLine
           ? '（有人点名了，必须回应。）'
           : '（本轮已决定参与群聊——必须发一条消息：接最近的话题、吐槽或提问都行；只有当上下文完全无法理解时才允许只结束回合。）')
-      + '绝不调用发送工具以外的输出形式，更绝不把"本轮不发/沉默/守则/战况分析"之类的内部盘算当成消息发出去，群里只许出现真正要说的那句话。）'
+      + '绝不调用发送工具以外的输出形式，更绝不把"本轮不发/沉默/守则/战况分析"之类的内部盘算当成消息发出去，群里只许出现真正要说的那句话。）' + (this.continueHint !== '' ? `
+${this.continueHint}` : '') + (this.stageHint !== '' ? `
+${this.stageHint}` : '')
+      + (this.lengthHint !== '' ? `\n${this.lengthHint}` : '')
 
     try {
       if (conversation.handle === null) {
@@ -782,6 +874,9 @@ ${prompt}`)
       pendingImages: [],
       seenMessageIds: new Set(),
       batchTimer: null,
+      dmTimer: null,
+      injectEscalation: null,
+      onTurnIdle: null,
       calledLine: false,
       lastPrompt: null,
       retryCount: 0,
@@ -794,6 +889,15 @@ ${prompt}`)
       lastEvent: event,
     }
     this.conversations.set(key, conversation)
+    // 私聊攒批补发口（2026-11-15 owner 令）：回合进行中到达的消息只攒不发，
+    // 回合结束（idle）后若攒批窗已停就立刻合并补发一包，消息不丢也不逐条各回
+    conversation.onTurnIdle = () => {
+      this.clearInjectEscalation(conversation)
+      if (conversation.isGroup) return
+      if (conversation.queue.length === 0 && conversation.pendingImages.length === 0) return
+      if (conversation.dmTimer !== null) return // 攒批窗还挂着，由它收尾，避免双发
+      void this.flushDm(conversation).catch((error: Error) => this.log(`dm flush after idle failed: ${errorChain(error)}`))
+    }
     return conversation
   }
 
@@ -967,6 +1071,34 @@ ${prompt}`)
     return this.workspace
   }
 
+  /** 注入升级（2026-11-16 owner 令）：注入消息若 120s 内没被回合消费（回合仍 running，
+   *  典型：卡在子智能体等待这类长工具上），以 followup 补投同一消息——下回合必然可见。
+   *  回合正常结束视为已消费，撤销补投（防重复）。 */
+  private armInjectEscalation(conversation: Conversation, agent: { status?: unknown; followup: (m: unknown) => void }, text: string, imageRefs: unknown[]): void {
+    this.clearInjectEscalation(conversation)
+    const timer = setTimeout(() => {
+      conversation.injectEscalation = null
+      if (agent.status !== 'running') return // 回合已结束：注入大概率已被结算消费
+      const content: PromptBlock[] = [{ type: 'text', text: '【补投】上一条消息送达时你正卡在长工具调用上，可能没被看到；若已处理过请忽略，否则现在处理：\n\n' + text }]
+      for (const attachment of imageRefs) content.push({ type: 'image', attachment })
+      const message = createUserMessage({ content, source: { kind: 'channel-qq', form: 'message' } } as never)
+      try {
+        agent.followup(message)
+        this.log(`inject escalation: followup re-delivered (${conversation.key})`)
+      } catch (error) {
+        this.log(`inject escalation failed: ${errorChain(error)}`)
+      }
+    }, 120_000)
+    timer.unref?.()
+    conversation.injectEscalation = { timer }
+  }
+
+  private clearInjectEscalation(conversation: Conversation): void {
+    if (conversation.injectEscalation) {
+      clearTimeout(conversation.injectEscalation.timer)
+      conversation.injectEscalation = null
+    }
+  }
   private submit(conversation: Conversation, prompt: string, imageRefs: unknown[] = []): void {
     // A fresh packet supersedes any armed gateway retry for the old one.
     clearGatewayRetry(conversation)
@@ -988,6 +1120,11 @@ ${prompt}`)
       const agentRecord = agent as { status?: unknown; steer?: (m: unknown) => void; inject?: (m: unknown) => void }
       const running = agentRecord.status === 'running'
       if (running) { if (typeof agentRecord.inject === 'function') agentRecord.inject(message); else agent.followup(message) }
+      if (running) {
+        // 2026-11-16 owner 令：注入只是『下一结算边界投递』——回合卡在长工具（子智能体等待等）
+        // 时边界迟迟不来，用户消息就悬死。挂升级定时器：仍在跑就把同一条消息以 followup 补投。
+        this.armInjectEscalation(conversation, agent, prompt, imageRefs)
+      }
       else if (this.config.injectMode.wakeIdle) { if (typeof agentRecord.steer === 'function') agentRecord.steer(message); else agent.followup(message) }
       else { if (typeof agentRecord.inject === 'function') agentRecord.inject(message); else agent.followup(message) }
     } else {
@@ -1038,14 +1175,16 @@ function attachTurnWatch(
   const events = agentCtx as unknown as {
     on(event: string, listener: (payload: never) => void): unknown
   }
-  events.on('agent/status', ((payload: { status?: string }) => {
-    if (payload?.status !== 'idle') return
-    if (conversation.pending || conversation.liveSubmitted) {
-      conversation.pending = false
-      conversation.liveSubmitted = false
-      log?.(`turn done for ${conversation.key}`)
-    }
-    if (!conversation.turnErrored) {
+    events.on('agent/status', ((payload: { status?: string }) => {
+      if (payload?.status !== 'idle') return
+      if (conversation.pending || conversation.liveSubmitted) {
+        conversation.pending = false
+        conversation.liveSubmitted = false
+        log?.(`turn done for ${conversation.key}`)
+      }
+      // 回合收尾钩子：私聊攒批的"回合进行中只攒不发"靠这里补发
+      try { conversation.onTurnIdle?.() } catch { /* hook errors never break the watch */ }
+      if (!conversation.turnErrored) {
       // Clean turn: the packet made it through, so no retry chain is needed.
       clearGatewayRetry(conversation)
       return

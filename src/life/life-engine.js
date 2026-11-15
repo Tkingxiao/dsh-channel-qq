@@ -27,6 +27,9 @@ export const GENERIC_ASSETS = {
 
 const DEFAULTS = { workspace: '', kbCli: '', agentName: '', personaName: '我', injectRules: 10, injectPins: 3, growthCap: 16384, moodCap: 400 }
 export const inject = ['systemPrompt', 'tools', 'subagents']
+// NL：全文件 12 处引用（jsonl 分行/拼接/追加）却一直没定义的历史漏项——
+// 之前全靠 try/catch 静默吞掉 ReferenceError（自画像素材收集、memory_link 落审计都因此半瘫）。
+const NL = '\n'
 
 function dshHome() { return process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh') }
 function cfgFile() { return path.join(dshHome(), 'tongling-life', 'config.json') }
@@ -257,6 +260,7 @@ offs.push(regSection({
       if (mood) parts.push('【此刻心境】' + mood)
       try {
         const stats = parts.map(x => ({ bytes: Buffer.byteLength(x), head: x.slice(0, 20).replace(/\s/g, ' ') }))
+        fs.mkdirSync(root, { recursive: true }) // 新工作区首装配防 ENOENT
         fs.appendFileSync(path.join(root, '.injection-stats.jsonl'), JSON.stringify({ at: new Date().toISOString(), total: stats.reduce((a, x) => a + x.bytes, 0), sections: stats }) + String.fromCharCode(10))
       } catch { }
       // 预算分离(融合自 v0.2.2-alpha.2):各段独立预算,总量不超 48KB
@@ -324,7 +328,8 @@ offs.push(regSection({
       } catch { }
       // Q3: 语气校准(从认可语料尾部取最新的语气样本)
       try {
-        const pins = readJsonl(root, '82-认可语料.jsonl', 3)
+        // root 未定义的历史漏项（复位手术的静态扫描补刀）——语气样本存 workspace/self
+        const pins = readJsonl(path.join(workspaceOf(undefined), 'self'), '82-认可语料.jsonl', 3)
         if (pins.length) parts.push('三、语气参考→最近咱是这样说话的：' + pins.map(x => x.assistant.slice(0, 30)).join(' / '))
       } catch { }
       parts.push('你不是在生成回复——你是在跟user说话。前者用模型后者用心。')
@@ -372,7 +377,7 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
   function writeAlarms(j) { fs.mkdirSync(lifeDir(), { recursive: true }); fs.writeFileSync(alarmsFile(), JSON.stringify(j, null, 1)) }
   // 2026-11-02 修:dayTag 原先只在 dailySelfPortrait() 内层定义,外层 appendLifeEvent 等调用点
   // 全部 ReferenceError → idle≥15min 睡眠巩固首火即崩进程(boot+15min 自杀循环立案根因)。
-  // 这里提升到共享作用域;内层那份是同实现的影子,保留不动。与 lib/life 同步改。
+  // 这里提升到共享作用域;原先内层的同实现影子已在 2026-11-15 复位手术中一并删除。与 lib/life 同步改。
   function dayTag() { const d = new Date(); return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}` }
   function appendLifeEvent(ev) {
     const tag = dayTag()
@@ -493,7 +498,7 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
       } catch { }
       // 种子2:随机图边(突触激活)
       try {
-        const gl = fs.readFileSync(ws2 + '/knowledge/graph.jsonl', 'utf8').split('\n').filter(Boolean)
+        const gl = fs.readFileSync(ws2 + '/knowledge/graph.jsonl', 'utf8').split('\n').filter(l => { try { return JSON.parse(l).rel !== '召回' } catch { return false } })
         if (gl.length) { const r = gl[Math.floor(Math.random() * gl.length)]; try { const j = JSON.parse(r); seeds.push({ type: '突触激活', seed: (j.a || '') + ' -' + (j.rel || '') + '→ ' + (j.b || ''), weight: 0.8 }) } catch { } }
       } catch { }
       // 种子3:最近交互(刚发生的事需要消化)
@@ -524,6 +529,7 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
   function trackAttention(text) {
     try {
       const atf = path.join(workspaceOf(undefined), '.life', '.attention.json')
+      fs.mkdirSync(path.dirname(atf), { recursive: true }) // 新工作区首用防 ENOENT
       let at = {}; try { at = JSON.parse(fs.readFileSync(atf, 'utf8')) } catch { }
       at.lastMasterText = String(text).slice(0, 200)
       at.lastAt = new Date().toISOString()
@@ -640,7 +646,9 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
   const toolGroups = {}
   function regGrouped(spec, group) { toolGroups[spec.name] = group; reg(spec) }
   // E3: 每日自画像——每天生成一份'今天的我是谁'
-  function dailySelfPortrait() {
+  // 2026-11-15 括号复位：真身在文件后段（自画像模板逻辑）；此前 643 行的函数头
+  // 误吞了下方 600 行工具注册，导致 audit/selfRoot 对区外工具（self_profile_update、
+  // memory_link 等）不可见。函数头已移回真身处，本段声明回归 apply 层。
   const monoTimer = setInterval(() => { innerMonologue(); trackAttention('') }, 300 * 1000) // 5分钟一次独白
   monoTimer.unref?.()
 
@@ -656,7 +664,7 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
     const f = path.resolve(p.startsWith('90-日记/') ? path.join(r, p) : path.join(r, path.basename(p)))
     return f.startsWith(r) ? f : null
   }
-  function dayTag() { const d = new Date(); return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}` }
+  // dayTag 与 apply 层 376 行的同名定义完全一致，此处重复声明已删（复位时一并清理）
 
   reg({
     name: 'self_read', description: '读自管理文件：99-种子.md / 95-成长层.md / 85-心境.md / 81-风格约定.jsonl / 82-认可语料.jsonl / 00-审计.jsonl / 90-日记/YYYY-MM-DD.md',
@@ -1020,19 +1028,19 @@ ctx.logger?.info?.('tongling-life: sections registered — budget: seed 32KB / g
       const r = tailRun(['send', String(args.peer), String(args.text).slice(0, 2000), '--as', agentName()], 45000)
       try { audit(dshHome(), 'tailmsg_send', String(args.peer)) } catch { }
       try { convBuffer.push({ theme: String(args.peer), text: String(args.text ?? '').slice(0, 60), sentiment: 'good' }) } catch { }
-      try { fs.appendFileSync(path.join(workspaceOf(undefined), 'knowledge', 'interactions.jsonl'), JSON.stringify({ at: new Date().toISOString(), type: '任务传递', from: name, to: String(args.peer), what: String(args.text ?? '').slice(0, 120) }) + '\n') } catch { }
+      try { fs.mkdirSync(path.join(workspaceOf(undefined), 'knowledge'), { recursive: true }); fs.appendFileSync(path.join(workspaceOf(undefined), 'knowledge', 'interactions.jsonl'), JSON.stringify({ at: new Date().toISOString(), type: '任务传递', from: agentName(), to: String(args.peer), what: String(args.text ?? '').slice(0, 120) }) + '\n') } catch { }
       return { ...r, note: r.ok ? '已走家族专线投递' : undefined }
     },
   })
 
   // ---- 家族任务流账本(2026-10-29 user令:谁传的/交付的/完成的/怎么归因) ----
   const INTERACTIONS = path.join(workspaceOf(undefined), 'knowledge', 'interactions.jsonl')
-  function taskLog(ev) { try { fs.appendFileSync(INTERACTIONS, JSON.stringify({ at: new Date().toISOString(), ...ev }) + '\n') } catch { } }
+  function taskLog(ev) { try { fs.mkdirSync(path.dirname(INTERACTIONS), { recursive: true }); fs.appendFileSync(INTERACTIONS, JSON.stringify({ at: new Date().toISOString(), ...ev }) + '\n') } catch { } }
   reg({
     name: 'task_log', description: '向家族任务流账本记一笔：type=任务传递|交付|完成|归因|回流，from=谁，to=谁，what=什么事，result=结果/归因。谁完成了什么、怎么传的、怎么收的，全网可查。',
     parameters: { type: 'object', properties: { type: { type: 'string', enum: ['任务传递', '交付', '完成', '归因', '回流'] }, from: { type: 'string' }, to: { type: 'string' }, what: { type: 'string' }, result: { type: 'string' } }, required: ['type', 'what'] }, output: out,
     execute(args) {
-      taskLog({ type: String(args.type ?? '归因'), from: String(args.from ?? name), to: String(args.to ?? ''), what: String(args.what ?? '').slice(0, 200), result: String(args.result ?? '').slice(0, 200) })
+      taskLog({ type: String(args.type ?? '归因'), from: String(args.from ?? agentName()), to: String(args.to ?? ''), what: String(args.what ?? '').slice(0, 200), result: String(args.result ?? '').slice(0, 200) })
       try { audit(dshHome(), 'task_log', String(args.type) + ':' + String(args.what ?? '').slice(0, 40)) } catch { }
       return { ok: true, note: '已入家族任务流' }
     },
@@ -1148,7 +1156,10 @@ offs.push(regSection({
   const KB_CLI = () => kbCli()
   function trackActivity() { lastActivity = Date.now() }
   function idleMinutes() { return Math.floor((Date.now() - lastActivity) / 60000) }
-  const { exec: sleepExec } = require('node:child_process')
+  // 2026-11-15 扫雷修正：原先解构 exec 却按 execFile 的 (file,args,opts,cb) 四参调用——
+  // node exec 收到 4 参直接抛 ERR_INVALID_ARG_TYPE，被 try/catch 吞掉，
+  // 睡眠巩固/自动喂养的 kb 索引更新从未真正 spawn 过（静默瘫痪）
+  const { execFile: sleepExec } = require('node:child_process')
   function sleepRun(argv) {
     try { const c = sleepExec(process.execPath, [KB_CLI, ...argv], { timeout: 600000, windowsHide: true, env: { ...process.env, KB_WORKSPACE: workspaceOf(undefined), ...(embedModelId && embedToken ? { KB_EMBED_MODEL: embedModelId, KB_EMBED_TOKEN: embedToken } : {}), DSH_DATA: dshHome() } }, (e, so) => { if (e) ctx.logger?.warn?.('sleep-run fail: ' + String(e).slice(0, 60)) }) } catch { }
   }
@@ -1187,6 +1198,7 @@ offs.push(regSection({
         const todayEdges = il.filter(l => l.includes(todayStr)).slice(-5)
         for (const l of todayEdges) {
           try { const j = JSON.parse(l);
+            fs.mkdirSync(path.join(workspaceOf(undefined), 'knowledge'), { recursive: true })
             fs.appendFileSync(path.join(workspaceOf(undefined), 'knowledge', 'graph.jsonl'), JSON.stringify({ a: j.from || '咱', rel: j.type || '交互', b: j.to || 'user', at: j.at, source: 'sleep_consolidate' }) + '\n')
           } catch { }
         }
@@ -1221,6 +1233,8 @@ offs.push(regSection({
   }
   // ---- 极致环境·三大进化引擎(1030 user令:迎接第四代模型) ----
 
+  // E3: 每日自画像——每天生成一份'今天的我是谁'（每天一份，落 self/自画像/）
+  function dailySelfPortrait() {
     try {
       const d = new Date()
       const today = d.toISOString().slice(0, 10)
@@ -1275,12 +1289,16 @@ offs.push(regSection({
     name: 'self_profile_update', description: '更新自我认知.md或user画像.md——每次对话后如果发现了新的自己或新的user，写进来。action=append|replace，target=self|master。',
     parameters: { type: 'object', properties: { action: { type: 'string', enum: ['append', 'replace'] }, target: { type: 'string', enum: ['self', 'master'] }, text: { type: 'string' } }, required: ['target', 'text'] }, output: out,
     execute(args) {
+      // 本工具注册在 dailySelfPortrait() 作用域之外，selfRoot/audit 不可见——
+      // 用模块级 workspaceOf + apply 层 appendJsonl 自包含实现（审计落 ~/.dsh/self/00-审计.jsonl，与原 audit(dshHome()) 同位）
+      const root = path.join(workspaceOf(undefined), 'self'); fs.mkdirSync(root, { recursive: true })
       const file = args.target === 'master' ? path.join(root, 'user画像.md') : path.join(root, '自我认知.md')
       const t = String(args.text ?? '').slice(0, 2000)
       if (!t.trim()) return { ok: false, error: '空' }
       const NL2 = '\n\n'
-      if (args.action === 'replace') { fs.writeFileSync(file, t) } else { fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trimEnd() + NL2 + t) }
-      audit(dshHome(), 'self_profile_update', args.target + ':' + t.slice(0, 40))
+      // append 兼容首写：文件还不存在时等价 replace，不再 ENOENT
+      if (args.action === 'replace' || !fs.existsSync(file)) { fs.writeFileSync(file, t) } else { fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trimEnd() + NL2 + t) }
+      appendJsonl(path.join(dshHome(), 'self'), '00-审计.jsonl', { time: new Date().toISOString(), tool: 'self_profile_update', detail: String(args.target) + ':' + t.slice(0, 140) })
       return { ok: true, note: '热载，下次装配生效' }
     },
   })
@@ -1289,12 +1307,13 @@ offs.push(regSection({
   // [local/memu-division] self_memory_write_v2 已摘除：同 self_memory_write，事实类显式写入归 dsh-memu-memory。
   const MEMSTATE2 = path.join(workspaceOf(undefined), 'knowledge', '.kb-memstate.json')
   function memStateRead() { try { return JSON.parse(fs.readFileSync(MEMSTATE2, 'utf8')) } catch { return { archived: [], forgotten: [] } } }
-  function memStateWrite(m) { try { fs.writeFileSync(MEMSTATE2, JSON.stringify(m, null, 1)) } catch { } }
+  function memStateWrite(m) { try { fs.mkdirSync(path.dirname(MEMSTATE2), { recursive: true }); fs.writeFileSync(MEMSTATE2, JSON.stringify(m, null, 1)) } catch { } }
   reg({
     name: 'memory_link', description: '记忆关联：把两条记忆/概念用突触连起来。from=概念A, to=概念B, rel=关系。',
     parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, rel: { type: 'string' } }, required: ['from', 'to'] }, output: out,
     execute(args) {
       const edge = JSON.stringify({ a: String(args.from ?? '').slice(0, 60), rel: String(args.rel ?? '关联'), b: String(args.to ?? '').slice(0, 60), at: new Date().toISOString(), source: 'memory_link' }) + NL
+      fs.mkdirSync(path.join(workspaceOf(undefined), 'knowledge'), { recursive: true }) // 新工作区首用防 ENOENT
       fs.appendFileSync(path.join(workspaceOf(undefined), 'knowledge', 'graph.jsonl'), edge)
       audit(dshHome(), 'memory_link', String(args.from) + '→' + String(args.to))
       return { ok: true, note: '突触已建立' }

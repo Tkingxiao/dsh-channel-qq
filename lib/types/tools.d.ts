@@ -14,6 +14,9 @@ import type { SentLog } from './sent-log.js';
 import type { KnowledgeStore } from './knowledge.js';
 export declare function isInnerMonologueLeak(text: string): boolean;
 export declare function isPersonaSignatureLeak(text: string): boolean;
+/** 回复字数范围闸（2026-11-15 owner 令）：正文计数剥掉思考块、连锁标记与空白，
+ *  只数真正要发出去的字。 */
+export declare function replyCharCount(text: string): number;
 export declare function registerQQTools(ctx: Context, config: QQChannelConfig, client: OneBotClient, out: OutboundQueue, log: (line: string) => void, library?: EmojiLibrary, affection?: {
     book(delta: number, reason: string): Promise<unknown>;
     setStage(stage: string, event: string): Promise<{

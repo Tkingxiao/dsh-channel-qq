@@ -202,8 +202,24 @@ async function cmdBrain(query, agentArg) {
 // ②关联边自积累:每次检索把"查询词→命中文件"写成图谱边(graph.jsonl),graphRecall 未来据此联想(用得越多图越厚)
 function graphEdgesAppend(q, hits) {
   try {
-    const out = hits.map(h => JSON.stringify({ a: String(q).slice(0, 40), rel: '召回', b: h.file, w: Number(Number(h.s ?? 0).toFixed(3)), at: new Date().toISOString(), source: 'kb_search' })).join('\n')
-    if (out) appendFileSync(WS + '/knowledge/graph.jsonl', out + '\n')
+    // 2026-11-16 扫雷：检索自积累边限流——旧口径每次检索把每个命中都写成 rel='召回' 边，
+    // 检索噪声把 graph.jsonl 淹掉，独白『突触激活』抽边全是复读。现口径：每次检索最多
+    // 记 top2 命中，且 (a|b) 重复的边不重写。
+    const graphFile = WS + '/knowledge/graph.jsonl'
+    let known = ''
+    try { known = readFileSync(graphFile, 'utf8') } catch { }
+    const seen = new Set()
+    for (const line of known.split('\n').slice(-400)) {
+      try { const j = JSON.parse(line); if (j.rel === '召回') seen.add(String(j.a) + '|' + String(j.b)) } catch { }
+    }
+    const edges = []
+    for (const h of hits.slice(0, 2)) {
+      const pair = String(q).slice(0, 40) + '|' + String(h.file)
+      if (seen.has(pair)) continue
+      seen.add(pair)
+      edges.push(JSON.stringify({ a: String(q).slice(0, 40), rel: '召回', b: h.file, w: Number(Number(h.s ?? 0).toFixed(3)), at: new Date().toISOString(), source: 'kb_search' }))
+    }
+    if (edges.length) appendFileSync(graphFile, edges.join('\n') + '\n')
   } catch { }
 }
 
@@ -523,8 +539,10 @@ async function cmdIndex() {
 function graphRecall(query, top = 3) {
   try {
     const gp = WS + '/knowledge/graph.jsonl'
-    if (!fs.existsSync(gp)) return []
-    const rows = fs.readFileSync(gp, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    // fs 未以命名空间引入（17 行只解构了函数），fs. 前缀是历史漏项——
+    // ReferenceError 被上层 try/catch 吞成 []，图边召回此前永远静默空转
+    if (!existsSync(gp)) return []
+    const rows = readFileSync(gp, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
     const hits = rows.filter(r => JSON.stringify(r).includes(query)).slice(0, top)
     return hits.map(r => ({ id: r.id || r.a, text: '图: ' + r.a + ' -' + r.rel + '→ ' + r.b + ' [' + (r.from||'') + ']', w: 0.8 }))
   } catch { return [] }

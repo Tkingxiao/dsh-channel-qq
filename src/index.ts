@@ -87,7 +87,18 @@ export class ChannelQQ extends Service {
 
     this.client = new OneBotClient(config.connection, config.accessToken, this.log)
     const out = new OutboundQueue(this.client, config, this.log)
+    const affection = new AffectionStore(defaultDshHome(), this.log, config.affectionMax ?? null)
+    await affection.load()
+    affection.configure({ selfName: config.persona.selfName, masterName: config.persona.masterName })
+    affection.serve(config.affectionPort, {
+      workspacePath: config.workspacePath,
+      onSubmit: (prompt: string) => {
+        if (this.bridge === null) return
+        void this.bridge.adminPrompt(prompt).catch((e: Error) => this.log(`admin prompt failed: ${e.message}`))
+      },
+    })
     this.bridge = new ConversationBridge(this.ctx, config, this.client, out, this.log)
+    this.bridge.setAffection(affection)
     this.emojiLibrary = new EmojiLibrary(config.emoji, this.log)
     await this.emojiLibrary.load()
     this.emoji = new EmojiStore(config.emoji, this.client, this.log, this.emojiLibrary)
@@ -104,16 +115,7 @@ export class ChannelQQ extends Service {
     })
     const primarySentLog = new SentLog(defaultDshHome(), config.primaryGroup !== null ? `group-${config.primaryGroup}` : 'group-none', this.log)
     await primarySentLog.load()
-    const affection = new AffectionStore(defaultDshHome(), this.log)
-    await affection.load()
-    affection.configure({ selfName: config.persona.selfName, masterName: config.persona.masterName })
-    affection.serve(config.affectionPort, {
-      workspacePath: config.workspacePath,
-      onSubmit: (prompt: string) => {
-        if (this.bridge === null) return
-        void this.bridge.adminPrompt(prompt).catch((e: Error) => this.log(`admin prompt failed: ${e.message}`))
-      },
-    })
+
     const knowledgeStore = new KnowledgeStore(defaultDshHome(), config.workspacePath, this.log)
     await knowledgeStore.load()
     this.bridge.knowledge = knowledgeStore

@@ -26,6 +26,10 @@
         permissionPreset: workspace-write
         rateLimitMs: 300
         maxMessageLength: 4000
+        # 回复字数范围：min~max 字，尽量向下限靠；max 是硬闸（超限拒发重试）。null=不限制
+        replyLength:
+          min: 80
+          max: 100
         segmentation:
           enabled: true
           minLength: 20
@@ -35,6 +39,8 @@
           windowMs: 20000
           maxMessages: 20
           maxChars: 4000
+          # 私聊连发攒批窗：连发多条合并成一包统一回一条；0=关（逐条直发）
+          dmWindowMs: 5000
         injectMode:
           enabled: false
           wakeIdle: true

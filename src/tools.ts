@@ -18,6 +18,9 @@ import type { OutboundQueue } from './outbound.js'
 import { segmentReply, smartSplitMessage } from './outbound.js'
 import type { SentLog } from './sent-log.js'
 import { runMessageChain } from './chain.js'
+import path from 'node:path'
+import { comfyGenerate, listComfyTemplates, comfyTemplatesDir } from './comfyui.js'
+import { applyConfigOverlay } from './settings-api.js'
 import { qqStickerMatch as qqStickerMatchClient, collectStickerFile as qqCollectStickerFile, listQqStickers } from './qq-sticker.js'
 import type { KnowledgeEntry, KnowledgeStore } from './knowledge.js'
 import type { AffectionStore } from './affection.js'
@@ -25,6 +28,9 @@ import type { AffectionStore } from './affection.js'
 interface ToolSpec {
   name: string
   description: string
+  /** 热更新描述（可选）：设置面板改 replyLength 等运行时可变项后，注册层每次读取都重新生成。
+   *  宿主若快照 description 则退化为注册时的静态值——硬闸与包尾提示仍热生效。 */
+  dynamicDescription?: () => string
   parameters: Record<string, unknown>
   run: (args: Record<string, unknown>) => Promise<unknown>
 }
@@ -139,8 +145,26 @@ export function isPersonaSignatureLeak(text: string): boolean {
   return list.some(w => lower.includes(w.toLowerCase()))
 }
 
+/** 回复字数范围闸（2026-11-15 owner 令）：正文计数剥掉思考块、连锁标记与空白，
+ *  只数真正要发出去的字。 */
+export function replyCharCount(text: string): number {
+  return text
+    .replace(/<思考>[\s\S]*?<\/思考>\s*/g, '')
+    .replace(/\[(?:表情|戳一戳|点赞|回应)\s*[:：][^\]]*\]|\[(?:戳一戳|点赞)\]/g, '')
+    .replace(/\s/g, '')
+    .length
+}
+
 export function registerQQTools(ctx: Context, config: QQChannelConfig, client: OneBotClient, out: OutboundQueue, log: (line: string) => void, library?: EmojiLibrary, affection?: { book(delta: number, reason: string): Promise<unknown>; setStage(stage: string, event: string): Promise<{ ok: boolean; note: string }>; writeCustomHtml(html: string): Promise<void> }, sentLogFor?: (key: string) => Promise<SentLog>, knowledge?: KnowledgeStore, sixDim?: { report(delta: Record<string, number>, note: string): Promise<void> }, dmGate?: { review(action: 'list' | 'approve' | 'deny', userId?: number): Promise<unknown>; canReach(userId: number): Promise<boolean> }): () => void {
   const disposers: Array<() => void> = []
+  // 2026-11-15 owner 令：字数红线——提示层拼进工具描述，硬闸拦超限发送（同代码禁令的拒发重试模式）。
+  // 一律动态读 live config（settings-api 面板热改后即刻生效，不缓存注册时的快照）。
+  const lengthRuleText = (): string => {
+    const rl = config.replyLength
+    return rl ? `【字数红线】回复正文（不含标记）必须控制在 ${rl.min}~${rl.max} 字，尽量向下限靠、宁短勿长；超过 ${rl.max} 字会被直接拒发。` : ''
+  }
+  const SEND_TEXT_DESC_BASE = '发送一条QQ文本消息。isGroup=true 时 target 为群号，否则为好友QQ号。窗口判断依据：收到消息的注入包里带【本会话是QQ私聊：…】标注=私聊会话，必须 isGroup=false 回私聊；带【群里的新消息】等群标头=群会话。没有窗口标注且无法判断时，先停止发送向发送者确认，禁止凭惯性填参数。text 里可内联连锁动作标记（按出现顺序执行，剩余文字照发）：[表情: 描述] 发表情包；[戳一戳] 私聊戳对方（群聊要 [戳一戳: QQ号]）；[点赞] 或 [点赞: 次数] 给对方点赞1-10次（仅私聊）；[回应: emoji] 给指定消息贴表情回应（需配 reactToId）。'
+  const REPLY_QUOTE_DESC_BASE = '引用回复某条消息：带上对方消息的#编号发一条引用回复，让对方明确知道咱回应的是哪条。文本里不要重复#编号。text 里可内联连锁标记：[表情: 描述] 发表情包；[回应: emoji] 给被引用的这条消息贴表情回应（不用配参数）；标记按序执行，剩余文字照常发送。'
 const memePackMatchFn = (desc: string): string | null => {
   try {
     const db = new DatabaseSync(MEME_PACK_DB)
@@ -268,7 +292,8 @@ const memePackMatchFn = (desc: string): string | null => {
   const specs: ToolSpec[] = [
     {
       name: 'qq_send_text',
-      description: '发送一条QQ文本消息。isGroup=true 时 target 为群号，否则为好友QQ号。窗口判断依据：收到消息的注入包里带【本会话是QQ私聊：…】标注=私聊会话，必须 isGroup=false 回私聊；带【群里的新消息】等群标头=群会话。没有窗口标注且无法判断时，先停止发送向发送者确认，禁止凭惯性填参数。text 里可内联连锁动作标记（按出现顺序执行，剩余文字照发）：[表情: 描述] 发表情包；[戳一戳] 私聊戳对方（群聊要 [戳一戳: QQ号]）；[点赞] 或 [点赞: 次数] 给对方点赞1-10次（仅私聊）；[回应: emoji] 给指定消息贴表情回应（需配 reactToId）。',
+      description: SEND_TEXT_DESC_BASE + lengthRuleText(),
+      dynamicDescription: () => SEND_TEXT_DESC_BASE + lengthRuleText(),
       parameters: {
         type: 'object',
         properties: {
@@ -284,6 +309,13 @@ const memePackMatchFn = (desc: string): string | null => {
       run: async (args) => {
         let text = String(args.text ?? '').trim().replace(/<思考>[\s\S]*?<\/思考>\s*/g, '').trim()
         if (text === '') throw new Error('消息文本为空（只有思考没有正文），先想清楚要说什么再发。')
+        // 字数红线硬闸（2026-11-15 owner 令）：超限直接拒发，逼模型精简重发；min 只做提示不做闸。
+        // 动态读 live config——面板热改字数范围后下一发即生效。
+        const gateMax = config.replyLength?.max ?? null
+        if (gateMax !== null) {
+          const n = replyCharCount(text)
+          if (n > gateMax) throw new Error(`字数红线：这条正文 ${n} 字，超过上限 ${gateMax} 字。精简到 ${gateMax} 字以内（目标 ${config.replyLength?.min ?? 0}~${gateMax} 字，宁短勿长）再发。`)
+        }
         // 【发前验证窗口】先查目标是否真实存在/正确，再发
         if (args.isGroup === true) {
           const gi = await client.call('get_group_info', { group_id: args.target }, 8000).catch(() => null) as { group_name?: string } | null
@@ -387,15 +419,21 @@ const memePackMatchFn = (desc: string): string | null => {
             }
           }
         }
-        if (chain.actions.length > 0 && lastResult !== null && typeof lastResult === 'object') {
-          return { ...(lastResult as Record<string, unknown>), chain: chain.actions }
+        // 2026-11-16 owner 令：发送成功的瞬间正是「收工还是继续」的决策点——结果里带一行
+        // 继续提示，与发言包尾的 continueHint 呼应；同一回合内生效，不重发请求。
+        const continueNote = '消息已送达。若本轮存在未完成的任务清单/进行中的计划，继续执行原任务，不要就此收工。'
+        if (lastResult !== null && typeof lastResult === 'object') {
+          const base = { ...(lastResult as Record<string, unknown>), note: continueNote }
+          if (chain.actions.length > 0) return { ...base, chain: chain.actions }
+          return base
         }
         return lastResult
       },
     },
     {
       name: 'qq_reply_quote',
-      description: '引用回复某条消息：带上对方消息的#编号发一条引用回复，让对方明确知道咱回应的是哪条。文本里不要重复#编号。text 里可内联连锁标记：[表情: 描述] 发表情包；[回应: emoji] 给被引用的这条消息贴表情回应（不用配参数）；标记按序执行，剩余文字照常发送。',
+      description: REPLY_QUOTE_DESC_BASE + lengthRuleText(),
+      dynamicDescription: () => REPLY_QUOTE_DESC_BASE + lengthRuleText(),
       parameters: {
         type: 'object',
         properties: {
@@ -409,6 +447,12 @@ const memePackMatchFn = (desc: string): string | null => {
       run: async (args) => {
         let text = String(args.text ?? '').trim().replace(/<思考>[\s\S]*?<\/思考>\s*/g, '').trim()
         if (text === '') throw new Error('回复文本为空（只有思考没有正文）。引用哪条、说什么，想好了再发。')
+        // 字数红线硬闸（2026-11-15 owner 令）：quote 路径同款——超限拒发，精简重发；动态读 live config
+        const gateMaxQ = config.replyLength?.max ?? null
+        if (gateMaxQ !== null) {
+          const n = replyCharCount(text)
+          if (n > gateMaxQ) throw new Error(`字数红线：这条引用回复 ${n} 字，超过上限 ${gateMaxQ} 字。精简到 ${gateMaxQ} 字以内（目标 ${config.replyLength?.min ?? 0}~${gateMaxQ} 字，宁短勿长）再发。`)
+        }
         // 【发前验证窗口】群引用必须验证群真实存在
         if (args.isGroup === true) {
           const gi = await client.call('get_group_info', { group_id: args.target }, 8000).catch(() => null) as { group_name?: string } | null
@@ -474,8 +518,13 @@ const memePackMatchFn = (desc: string): string | null => {
             }
           }
         }
-        if (chain.actions.length > 0 && lastResult !== null && typeof lastResult === 'object') {
-          return { ...(lastResult as Record<string, unknown>), chain: chain.actions }
+        // 2026-11-16 owner 令：发送成功的瞬间正是「收工还是继续」的决策点——结果里带一行
+        // 继续提示，与发言包尾的 continueHint 呼应；同一回合内生效，不重发请求。
+        const continueNote = '消息已送达。若本轮存在未完成的任务清单/进行中的计划，继续执行原任务，不要就此收工。'
+        if (lastResult !== null && typeof lastResult === 'object') {
+          const base = { ...(lastResult as Record<string, unknown>), note: continueNote }
+          if (chain.actions.length > 0) return { ...base, chain: chain.actions }
+          return base
         }
         return lastResult
       },
@@ -2033,13 +2082,90 @@ ${String(args.code ?? '')}`
         return { ok: okCount > 0, total: results.length, succeeded: okCount, failed: results.length - okCount, results }
       },
     },
+  {
+    name: 'qq_comfy_image',
+    description: '【ComfyUI 生图】用 JSON 模板生成图片并发到会话。prompt 写画面描述；template 选模板名（不传用默认模板，先用 qq_comfy_templates 看有哪些）；negative 可选负面提示词；overrides 可选，用于精确控制模板参数（如 {"6.inputs.text": "...", "3.inputs.seed": 42}）。生成需要 10s~几分钟，视模型而定。',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '正向提示词（画面描述，继承模板里其他设定）' },
+        template: { type: 'string', description: '模板名（模板目录里的 JSON 文件名，不带 .json）' },
+        negative: { type: 'string', description: '（可选）负向提示词' },
+        overrides: { type: 'object', description: '（可选）节点级参数覆盖，键=节点ID.路径，值=任意' },
+        isGroup: { type: 'boolean', description: '是否发送到群聊' },
+        target: { type: 'number', description: '群号或好友QQ号' },
+      },
+      required: ['prompt', 'isGroup', 'target'],
+    },
+    run: async (args) => {
+      const result = await comfyGenerate(config, {
+        prompt: String(args.prompt ?? ''),
+        template: args.template ? String(args.template) : undefined,
+        negative: args.negative ? String(args.negative) : undefined,
+        overrides: (args.overrides && typeof args.overrides === 'object') ? args.overrides as Record<string, unknown> : undefined,
+      })
+      const message = result.images.map(buf => ({ type: 'image', data: { file: `base64://${buf.toString('base64')}` } }))
+      const res = args.isGroup === true
+        ? await out.push(() => callTool('send_group_msg', { group_id: args.target, message }))
+        : await out.push(() => callTool('send_private_msg', { user_id: args.target, message }))
+      return { ok: true, seed: result.seedUsed, template: result.template, images: result.images.length, note: 'seed 已回填可复现；相同 prompt+seed 出同图。', result: res }
+    },
+  },
+  {
+    name: 'qq_comfy_templates',
+    description: '列出可用的 ComfyUI 生图模板名。生图前如果不确定有哪些模板/默认模板是什么，先调这个。',
+    parameters: { type: 'object', properties: {} },
+    run: async () => {
+      const templates = listComfyTemplates(config)
+      const def = config.comfyui?.defaultTemplate || null
+      return { ok: true, templates, default: def, dir: comfyTemplatesDir(config), note: templates.length ? '用 qq_comfy_image 的 template 参数选择。' : '目录为空：把 ComfyUI 的 workflow JSON（API 格式或普通保存的 JSON）放进上面 dir 即可。' }
+    },
+  },
+  {
+    name: 'qq_debug_config',
+    description: '【调试用·白名单】读/改面板里的 ComfyUI 调试配置（url/模板目录/默认模板），改动立即生效并持久化（重启不丢，面板刷新同步显示）。用于 ComfyUI 搬家、模板目录调整等调试场景。action=get 读当前值与可用模板；action=set 传 patch（键必须在白名单内）。其他配置（token/连接/自我修改）永远不在此工具范围内。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'set'], description: 'get=读当前值；set=写入 patch' },
+        patch: { type: 'object', description: 'action=set 时必填：如 {"comfyui.url": "http://127.0.0.1:8188", "comfyui.templatesDir": "D:/..."}（键必须白名单内）' },
+      },
+      required: ['action'],
+    },
+    run: async (args) => {
+      const WHITELIST = ['comfyui.url', 'comfyui.templatesDir', 'comfyui.defaultTemplate'] as const
+      const action = String(args.action ?? 'get')
+      const dshHome = process.env.DSH_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '.', '.dsh')
+      const readCurrent = () => {
+        const current: Record<string, unknown> = {}
+        for (const key of WHITELIST) {
+          let cur: unknown = config
+          for (const seg of key.split('.')) { cur = (cur as Record<string, unknown>)?.[seg] }
+          current[key] = cur ?? null
+        }
+        return current
+      }
+      if (action !== 'set') {
+        return { ok: true, config: readCurrent(), templates: listComfyTemplates(config), whitelist: WHITELIST }
+      }
+      const patch = (args.patch && typeof args.patch === 'object') ? args.patch as Record<string, unknown> : null
+      if (!patch || !Object.keys(patch).length) return { ok: false, note: 'action=set 需要非空 patch' }
+      const bad = Object.keys(patch).filter(k => !(WHITELIST as readonly string[]).includes(k))
+      if (bad.length) return { ok: false, note: '以下键不在白名单内，拒绝：' + bad.join(', ') + '（允许：' + WHITELIST.join(', ') + '）' }
+      const applied = applyConfigOverlay(config, dshHome, patch, WHITELIST)
+      log('debug config: applied ' + applied.join(', '))
+      return { ok: applied.length > 0, applied, config: readCurrent(), note: applied.length ? '已生效并持久化（面板刷新可见）。' : '没有合法键被应用。' }
+    },
+  },
   ]
 
   for (const spec of specs) {
     try {
       disposers.push(tools.register({
         name: spec.name,
-        description: spec.description,
+        // 动态描述：宿主每次列工具都重读，热改 replyLength 后描述即时跟随；
+        // 宿主若一次性快照，则退化为注册时的静态值（等价旧行为，无副作用）
+        get description() { return spec.dynamicDescription ? spec.dynamicDescription() : spec.description },
         parameters: spec.parameters,
         output: {
           schema: { type: 'object' },

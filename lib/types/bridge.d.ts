@@ -38,6 +38,22 @@ export declare class ConversationBridge {
     private readonly out;
     private readonly log;
     private get persona();
+    /** 回复字数范围提示（2026-11-15 owner 令）：拼进各发言包尾，与工具描述里的字数红线呼应。
+     *  提示层引导 min~max 区间、向下限靠；超限硬闸在发送工具里。 */
+    /** 回复后继续任务提示（2026-11-16 owner 令）：QQ 消息注入到正在干活的回合里时，
+     *  模型回复完就把回合当完成收工，任务清单停在一半——发言包尾统一带上
+     *  「回复完继续未完成任务」的指令。 */
+    /** 好感度引用（index 注入）：满百阶段宣言提示用。 */
+    private affectionRef;
+    setAffection(affection: {
+        shouldNudgeStage(): boolean;
+        markStageNudged(): void;
+    }): void;
+    /** 满百阶段宣言提示（2026-11-16 owner 令）：score>=100 时给一次「阶段由你定义」的提示，
+     *  防止她永远停在默认阶段里。一次性（markStageNudged 持久化）。 */
+    private get stageHint();
+    private get continueHint();
+    private get lengthHint();
     /** Web console summary of every conversation window (one row per group / DM peer). */
     snapshot(): Array<{
         key: string;
@@ -118,6 +134,9 @@ export declare class ConversationBridge {
     handleEvent(event: OneBotEvent): Promise<void>;
     /** Arm (or re-arm) the quiet-window timer for one batched analysis. */
     private scheduleBatch;
+    /** 私聊攒批冲洗（2026-11-15 owner 令）：把静默窗内连发的消息合并成一包递给她。
+     *  回合进行中只攒不冲——等 attachTurnWatch 的 idle 钩子回来补发，绝不逐条 followup。 */
+    private flushDm;
     /** Deliver one group message straight into the agent context (inject mode). */
     private injectNow;
     /**
@@ -135,5 +154,10 @@ export declare class ConversationBridge {
     /** 2026-11-07 开 public：tools 层按窗口取发送流水账本（私聊不再串进群文件） */
     sentLogFor(key: string): Promise<SentLog>;
     private ensureWorkspace;
+    /** 注入升级（2026-11-16 owner 令）：注入消息若 120s 内没被回合消费（回合仍 running，
+     *  典型：卡在子智能体等待这类长工具上），以 followup 补投同一消息——下回合必然可见。
+     *  回合正常结束视为已消费，撤销补投（防重复）。 */
+    private armInjectEscalation;
+    private clearInjectEscalation;
     private submit;
 }

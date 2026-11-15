@@ -684,17 +684,22 @@ function toast(msg, ok) {
 const CFG_GROUPS = [
   { id: 'trigger', fields: [
     { k: 'talkValue', label: '群聊回复概率 talkValue', type: 'number', step: 0.05, min: 0, max: 1, hint: '0~1，无 @ 时的插话门槛' },
+    { k: 'affectionMax', label: '好感度上限', type: 'nullable', hint: '留空=无上限（可超百）；填数值则封顶（原默认 100）' },
     { k: 'participateCoin', label: '参与币 participateCoin', type: 'number', step: 0.05, min: 0, max: 1, hint: '过概率闸后再掷此币，命中才发言。0.5=有效频率≈talkValue×0.5；1=每批必回；0=纯潜水' },
     { k: 'requireMention', label: '必须 @ 才回应', type: 'boolean', hint: '关=关键词/概率也会接话' },
     { k: 'rateLimitMs', label: '发送限速 rateLimitMs', type: 'number', step: 50, hint: '毫秒' },
     { k: 'maxMessageLength', label: '单条长度上限', type: 'number', step: 100 },
+    { k: 'replyLength.enabled', label: '回复字数范围', type: 'boolean', hint: '开启后回复正文控制在 min~max 字，超过上限直接拒发；关闭=不限制' },
+    { k: 'replyLength.min', label: '字数下限 min', type: 'number', step: 5, min: 0, hint: '提示层引导（不做硬闸），提示她尽量向下限靠' },
+    { k: 'replyLength.max', label: '字数上限 max', type: 'number', step: 5, min: 1, hint: '硬闸：超限的 qq_send_text / qq_reply_quote 会被拦下要求精简重发' },
     { k: 'segmentation.enabled', label: '智能分段', type: 'boolean', hint: '按句切分更像人' },
     { k: 'segmentation.maxSegments', label: '分段数上限', type: 'number', step: 1 },
     { k: 'batching.windowMs', label: '攒批窗口 windowMs', type: 'number', step: 500, hint: '毫秒，攒多条一起处理' },
     { k: 'batching.maxMessages', label: '攒批条数上限', type: 'number', step: 1 },
+    { k: 'batching.dmWindowMs', label: '私聊连发攒批窗', type: 'number', step: 500, hint: '毫秒：私聊连发多条时等这段静默后合并成一包统一回一条（治逐条各回）；0=关（逐条直发）' },
   ]},
   { id: 'route', fields: [
-    { k: 'defaultModel', label: '默认模型', type: 'model', hint: 'DM 与群聊跟随的默认路由；下拉为 DSH 已注册模型，选「自定义」可填 provider / model / 推理力度，保存即热切换' },
+    { k: 'defaultModel', label: '默认模型', type: 'model', hint: 'DM 与群聊跟随的默认路由；下拉为 DSH 已注册模型，选「自定义」可填 provider / model；推理力度对两种方式都生效（空=跟随默认），保存即热切换' },
     { k: 'persona.selfName', label: 'bot 自称', type: 'string' },
     { k: 'persona.masterName', label: '对主人的称呼', type: 'string' },
     { k: 'persona.peerName', label: '对群友的称呼', type: 'string' },
@@ -730,6 +735,10 @@ const CFG_GROUPS = [
     { k: 'poke.enabled', label: '戳一戳裁决', type: 'boolean', hint: '被戳时交给她自己决定怎么回' },
     { k: 'poke.pokeBack', label: '允许戳回去', type: 'boolean' },
     { k: 'imageRecognition.enabled', label: '图片识别', type: 'boolean', hint: '入站图片附件化（多模态）' },
+    { k: 'comfyui.url', label: 'ComfyUI 地址', type: 'string', hint: '生图接入：如 http://127.0.0.1:8188' },
+    { k: 'comfyui.templatesDir', label: 'ComfyUI 模板目录', type: 'string', wide: true, hint: 'workflow JSON 所在目录（文件名=模板名）；UI 格式自动转 API 格式（含子图的需 API 导出）' },
+    { k: 'comfyui.url', label: 'ComfyUI 地址', type: 'string', hint: '生图接入：如 http://127.0.0.1:8188；模板 JSON 放 ~/.dsh/comfyui-templates' },
+    { k: 'comfyui.defaultTemplate', label: 'ComfyUI 默认模板', type: 'nullable', hint: '模板目录里的文件名（不带 .json）；留空=每次生图需显式指定' },
   ]},
 ];
 
@@ -752,6 +761,17 @@ const CardCfg = {
           sel.appendChild(loading);
           sel.addEventListener('change', () => { this.syncModelCustom(); this.markDirty(); clearTimeout(this._autoTimer); this._autoTimer = setTimeout(() => this.save(), 300); });
           field.appendChild(sel);
+          // 推理力度对所有选择生效（模型列表 / 自定义均可用）——此前藏在自定义分支里，
+          // 列表选择永远只能"跟随默认"，思考强度根本开不起来
+          const effRow = document.createElement('div');
+          const effLbl = document.createElement('div'); effLbl.style.cssText = 'font-size:11.5px;color:var(--tx3);margin-top:9px;margin-bottom:4px;'; effLbl.textContent = '推理力度 reasoningEffort（对上面选的模型生效）';
+          const es = document.createElement('select'); es.id = 'f-defaultModel-e';
+          for (const [v, t] of [['', '跟随默认'], ['off', 'off（关闭推理）'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']]) {
+            const o = document.createElement('option'); o.value = v; o.textContent = t; es.appendChild(o);
+          }
+          es.addEventListener('change', () => this.markDirty());
+          effRow.appendChild(effLbl); effRow.appendChild(es);
+          field.appendChild(effRow);
           const cust = document.createElement('div');
           cust.id = 'f-defaultModel-custom';
           cust.style.cssText = 'display:none;flex-direction:column;gap:9px;margin-top:9px;padding:11px 12px;border:1px dashed var(--line2);border-radius:9px;';
@@ -763,17 +783,8 @@ const CardCfg = {
             row.appendChild(l); row.appendChild(inp);
             return row;
           };
-          const effRow = document.createElement('div');
-          const effLbl = document.createElement('div'); effLbl.style.cssText = 'font-size:11.5px;color:var(--tx3);margin-bottom:4px;'; effLbl.textContent = '推理力度 reasoningEffort';
-          const es = document.createElement('select'); es.id = 'f-defaultModel-e';
-          for (const [v, t] of [['', '跟随默认'], ['off', 'off（关闭推理）'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']]) {
-            const o = document.createElement('option'); o.value = v; o.textContent = t; es.appendChild(o);
-          }
-          es.addEventListener('change', () => this.markDirty());
-          effRow.appendChild(effLbl); effRow.appendChild(es);
           cust.appendChild(mkRow('provider（如 wb）', 'f-defaultModel-p'));
           cust.appendChild(mkRow('model id（如 glm-5.3-flash）', 'f-defaultModel-m'));
-          cust.appendChild(effRow);
           field.appendChild(cust);
           if (f.hint) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = f.hint; field.appendChild(h); }
           box.appendChild(field);
@@ -840,6 +851,7 @@ const CardCfg = {
         this.snapshot[f.k] = this.serialize(f.k);
       }
       this.markDirty();
+      syncReplyLengthGate();
     }).catch(() => {});
     this.loadModels();
   },
@@ -968,6 +980,17 @@ const CardCfg = {
   },
 };
 $('save-fab').onclick = () => CardCfg.save();
+
+// replyLength 联动：开关关闭时置灰 min/max（后端在 null 态会忽略这两个键），
+// 防"改了数值却不生效"的困惑；load 后按当前开关状态同步一次
+function syncReplyLengthGate() {
+  const on = $('f-replyLength.enabled')?.checked === true;
+  for (const k of ['f-replyLength.min', 'f-replyLength.max']) {
+    const el = document.getElementById(k);
+    if (el) el.disabled = !on;
+  }
+}
+document.getElementById('f-replyLength.enabled')?.addEventListener('change', syncReplyLengthGate);
 
 const CfgTabs = {
   show(tab) {

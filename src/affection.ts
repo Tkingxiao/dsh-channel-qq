@@ -31,6 +31,8 @@ export interface AffectionState {
   stage: string
   events: AffectionEvent[]
   stageHistory: StageChange[]
+  /** 满百阶段宣言提示已给过（一次性） */
+  stageNudged?: boolean
 }
 
 /** Stages are HERS: she defines the ladder from her own memory via qq_set_stage.
@@ -43,7 +45,7 @@ export class AffectionStore {
   private workspacePath: string | null = null
   private onSubmit: ((prompt: string) => void) | null = null
 
-  constructor(dshHome: string, private readonly log: (line: string) => void) {
+  constructor(dshHome: string, private readonly log: (line: string) => void, readonly maxScore: number | null = null) {
     this.file = path.join(dshHome, 'affection.json')
   }
 
@@ -67,6 +69,7 @@ export class AffectionStore {
           stage: typeof raw.stage === 'string' ? raw.stage : '道侣未遂',
           events: Array.isArray(raw.events) ? raw.events.slice(-100) : [],
           stageHistory: Array.isArray(raw.stageHistory) ? raw.stageHistory : [],
+          stageNudged: raw.stageNudged === true,
         }
       }
     } catch {
@@ -75,18 +78,48 @@ export class AffectionStore {
   }
 
   async save(): Promise<void> {
-    await fs.writeFile(this.file, JSON.stringify(this.state, null, 1)).catch(() => {})
+    // stageNudged 以文件为准：save 不写内存值，保留文件里的现值（防运行时覆盖主人的手动重置）
+    let prev: Partial<AffectionState> = {}
+    try { prev = JSON.parse(await fs.readFile(this.file, 'utf-8')) } catch { }
+    const { stageNudged: _omit, ...rest } = this.state
+    await fs.writeFile(this.file, JSON.stringify({ ...rest, stageNudged: prev.stageNudged === true }, null, 1)).catch(() => {})
   }
 
   /** Book one score change (rises AND falls); stage is never touched here. */
   async book(delta: number, reason: string): Promise<AffectionState> {
     const clamped = Math.max(-30, Math.min(30, delta))
-    this.state.score = Math.max(0, Math.min(100, this.state.score + clamped))
+    // 2026-11-16 owner 令：上限可配（affectionMax，null=无上限）——满百不再是天花板
+    this.state.score = Math.max(0, Math.min(this.maxScore ?? Number.POSITIVE_INFINITY, this.state.score + clamped))
     this.state.events.push({ time: Date.now(), delta: clamped, reason: reason.slice(0, 120) })
     if (this.state.events.length > 100) this.state.events = this.state.events.slice(-100)
     await this.save()
     this.log(`affection ${clamped >= 0 ? '+' : ''}${clamped} → ${this.state.score} (stage ${this.state.stage}) | ${reason}`)
     return this.state
+  }
+
+  /** 满百阶段宣言提示（2026-11-16 owner 令）：score>=100 且还没提示过 → true，只提示一次。 */
+  shouldNudgeStage(): boolean {
+    // 2026-11-16 owner 令：以文件为准——主人可手动把 stageNudged 改回 false 再提示一遍，
+    // 不必重启（运行时内存不覆盖该标记）。
+    if (this.state.score < 100) return false
+    try {
+      const raw = JSON.parse(readFileSync(this.file, 'utf-8')) as AffectionState
+      return raw.stageNudged !== true
+    } catch {
+      return this.state.stageNudged !== true
+    }
+  }
+
+  markStageNudged(): void {
+    this.state.stageNudged = true
+    try {
+      const raw = JSON.parse(readFileSync(this.file, 'utf-8')) as Partial<AffectionState>
+      void fs.writeFile(this.file, JSON.stringify({ ...raw, stageNudged: true }, null, 1))
+    } catch { }
+  }
+
+  snapshot(): { score: number; stage: string; stageNudged?: boolean } {
+    return { score: this.state.score, stage: this.state.stage, stageNudged: this.state.stageNudged }
   }
 
   /** Set the stage to whatever she declares — from her memory, her truth.
@@ -290,8 +323,9 @@ async function tick() {
     const d = await r.json()
     document.getElementById('score').textContent = d.score
     document.getElementById('stage').textContent = d.stage
-    document.getElementById('fill').style.width = d.score + '%'
-    document.getElementById('pct').textContent = d.score + ' / 100'
+    document.getElementById('fill').style.width = Math.min(100, this.maxScore ? (d.score / this.maxScore) * 100 : Math.min(100, d.score)) + '%'
+    const max = this.maxScore ?? null
+document.getElementById('pct').textContent = d.score + (max ? ' / ' + max : '')
     document.getElementById('log').innerHTML = (d.events || []).slice(-30).reverse().map(e => {
       const t = new Date(e.time).toLocaleString('zh', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
       const cls = e.delta >= 0 ? 'delta-pos' : 'delta-neg'
