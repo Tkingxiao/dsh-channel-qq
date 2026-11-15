@@ -686,7 +686,6 @@ const CFG_GROUPS = [
     { k: 'talkValue', label: '群聊回复概率 talkValue', type: 'number', step: 0.05, min: 0, max: 1, hint: '0~1，无 @ 时的插话门槛' },
     { k: 'participateCoin', label: '参与币 participateCoin', type: 'number', step: 0.05, min: 0, max: 1, hint: '过概率闸后再掷此币，命中才发言。0.5=有效频率≈talkValue×0.5；1=每批必回；0=纯潜水' },
     { k: 'requireMention', label: '必须 @ 才回应', type: 'boolean', hint: '关=关键词/概率也会接话' },
-    { k: 'groupEnabled', label: '群聊总开关', type: 'boolean' },
     { k: 'rateLimitMs', label: '发送限速 rateLimitMs', type: 'number', step: 50, hint: '毫秒' },
     { k: 'maxMessageLength', label: '单条长度上限', type: 'number', step: 100 },
     { k: 'segmentation.enabled', label: '智能分段', type: 'boolean', hint: '按句切分更像人' },
